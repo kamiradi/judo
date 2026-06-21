@@ -214,6 +214,20 @@ def set_default_spot_overrides() -> None:
         _set_spot_optimizer_overrides(task_name)
 
 
+def set_default_peg_insertion_twist_overrides() -> None:
+    """Sets the default optimizer config overrides for the twist peg-insertion tasks.
+
+    Lower the predictive-sampling noise (sigma) for finer control exploration, matching the
+    slow, force-careful insertion motion (linear ctrlrange is only +-0.01 m/s).
+    """
+    for task_name in ("peg_insertion_twist", "peg_insertion_twist_rectangle"):
+        set_config_overrides(
+            task_name,
+            PredictiveSamplingConfig,
+            {"sigma": 0.03},
+        )
+
+
 def set_default_fr3_pick_overrides() -> None:
     """Sets the default task-specific controller config overrides for the fr3 pick task."""
     set_config_overrides(

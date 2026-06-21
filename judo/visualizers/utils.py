@@ -104,12 +104,24 @@ def apply_mujoco_material(
     color = tuple(int(x) for x in rgba.tolist())
     pbr.alphaMode = "BLEND" if rgba[3] < 255 else "OPAQUE"
 
-    # Set PBR values
-    pbr.metallicFactor = float(material.metallic)
-    pbr.roughnessFactor = float(material.roughness)
-    pbr.emissiveFactor = [material.emission] * 3
-    if material.roughness == 0.0 and getattr(material, "shininess", 0) > 0:
-        pbr.roughnessFactor = np.sqrt(2.0 / (material.shininess + 2.0)).item()
+    # Set PBR values. MuJoCo leaves metallic/roughness at -1 ("unset") when a material
+    # uses the legacy specular/shininess workflow (e.g. the Menagerie KUKA). Passing
+    # negative factors to the glTF PBR material makes surfaces render as mirror-like
+    # metal -> the "weird reflecting" artifacts, so clamp/derive sane values.
+    metallic = float(material.metallic)
+    pbr.metallicFactor = metallic if metallic >= 0.0 else 0.0
+
+    roughness = float(material.roughness)
+    if roughness < 0.0:
+        # derive roughness from Phong shininess; fall back to fully matte if unset.
+        shininess = float(getattr(material, "shininess", 0.0) or 0.0)
+        roughness = np.sqrt(2.0 / (shininess + 2.0)).item() if shininess > 0.0 else 1.0
+    elif roughness == 0.0 and getattr(material, "shininess", 0) > 0:
+        roughness = np.sqrt(2.0 / (material.shininess + 2.0)).item()
+    pbr.roughnessFactor = roughness
+
+    emission = float(material.emission)
+    pbr.emissiveFactor = [max(emission, 0.0)] * 3
 
     # Get existing UV coordinates
     uv = getattr(mesh.visual, "uv", None)

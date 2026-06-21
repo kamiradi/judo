@@ -10,6 +10,12 @@ from judo.tasks.cylinder_push import CylinderPush, CylinderPushConfig
 from judo.tasks.fr3_pick import FR3Pick, FR3PickConfig
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
 from judo.tasks.leap_cube_down import LeapCubeDown, LeapCubeDownConfig
+from judo.tasks.peg_insertion import PegInsertion, PegInsertionConfig
+from judo.tasks.peg_insertion_twist import (
+    PegInsertionTwist,
+    PegInsertionTwistConfig,
+    PegInsertionTwistRectangle,
+)
 from judo.tasks.spot import (
     SpotBase,
     SpotBaseConfig,
@@ -43,6 +49,9 @@ _registered_tasks: Dict[str, TaskRegistration] = {
     LeapCube.name: TaskRegistration(LeapCube, LeapCubeConfig),
     LeapCubeDown.name: TaskRegistration(LeapCubeDown, LeapCubeDownConfig),
     CaltechLeapCube.name: TaskRegistration(CaltechLeapCube, CaltechLeapCubeConfig),
+    PegInsertion.name: TaskRegistration(PegInsertion, PegInsertionConfig),
+    PegInsertionTwist.name: TaskRegistration(PegInsertionTwist, PegInsertionTwistConfig),
+    PegInsertionTwistRectangle.name: TaskRegistration(PegInsertionTwistRectangle, PegInsertionTwistConfig),
     SpotBase.name: TaskRegistration(
         SpotBase,
         SpotBaseConfig,
@@ -131,6 +140,11 @@ __all__ = [
     "LeapCubeConfig",
     "LeapCubeDown",
     "LeapCubeDownConfig",
+    "PegInsertion",
+    "PegInsertionConfig",
+    "PegInsertionTwist",
+    "PegInsertionTwistConfig",
+    "PegInsertionTwistRectangle",
     "SpotBase",
     "SpotBaseConfig",
     "SpotBoxPush",

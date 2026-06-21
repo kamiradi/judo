@@ -202,6 +202,7 @@ cmake = ">=3.15"
 eigen = ">=3.4"
 pybind11 = ">=2.11"
 onnxruntime-cpp = "1.19.*"  # pin to match starfish (1.22+ needs CXXABI_1.3.15 / GCC 14)
+roslibpy = ">=2.0.0,<3"
 
 [tool.pixi.target.linux-64.dependencies]
 libgomp = ">=13"  # OpenMP runtime for Linux

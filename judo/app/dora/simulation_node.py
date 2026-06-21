@@ -4,7 +4,7 @@ import time
 import warnings
 from typing import Callable
 
-from dora_utils.dataclasses import from_arrow, to_arrow
+from dora_utils.dataclasses import from_arrow, from_event, to_arrow
 from dora_utils.node import DoraNode, on_event
 from omegaconf import DictConfig
 
@@ -113,6 +113,16 @@ class SimulationNode(DoraNode):
     def reset_task(self, event: dict) -> None:
         """Resets the task."""
         self.sim.task.reset()
+
+    @on_event("INPUT", "task_config")
+    def update_task_config(self, event: dict) -> None:
+        """Update the simulation task's config so it can react to GUI changes.
+
+        The controller node already receives ``task_config`` for the reward; the sim node
+        needs it too for tasks whose ``pre_sim_step``/``reset`` read config (e.g. the
+        peg-insertion movable pedestal+hole pose sliders).
+        """
+        self.sim.task.config = from_event(event, type(self.sim.task.config))
 
     @on_event("INPUT", "controls")
     def update_control(self, event: dict) -> None:

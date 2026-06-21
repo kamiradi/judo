@@ -1,0 +1,68 @@
+<mujoco model="iiwa14_arm">
+  <!-- KUKA iiwa14 arm parameters, adapted from MuJoCo Menagerie (kuka_iiwa_14). -->
+  <!-- Provides compiler/option, the "iiwa" default class, mesh+material assets, -->
+  <!-- and the 7 position actuators. The body tree lives in iiwa_no_tool.xml.    -->
+  <compiler angle="radian" autolimits="true"/>
+  <option integrator="implicitfast" timestep="0.004" impratio="10.0"/>
+
+  <default>
+    <default class="iiwa">
+      <material specular="0.5" shininess="0.25"/>
+      <joint axis="0 0 1" damping="0.5"/>
+      <general gaintype="fixed" biastype="affine" gainprm="2000" biasprm="0 -2000 -200"/>
+      <default class="joint1">
+        <joint range="-2.96706 2.96706"/>
+        <general ctrlrange="-2.96706 2.96706"/>
+        <default class="joint2">
+          <joint range="-2.0944 2.0944"/>
+          <general ctrlrange="-2.0944 2.0944"/>
+        </default>
+      </default>
+      <default class="joint3">
+        <joint range="-3.05433 3.05433"/>
+        <general ctrlrange="-3.05433 3.05433"/>
+      </default>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" material="gray"/>
+      </default>
+      <!-- Arm links are "robot" colliders (contype=1, conaffinity=2): they collide -->
+      <!-- with "obstacle" geoms (hole + table = contype=2, conaffinity=1) but not   -->
+      <!-- with each other or the peg, since (1 & 2) == 0. No self-collision needed. -->
+      <default class="collision">
+        <geom group="3" contype="1" conaffinity="2"/>
+      </default>
+      <site size="0.001" rgba="1 0 0 1" group="4"/>
+    </default>
+  </default>
+
+  <asset>
+    <material class="iiwa" name="gray" rgba="0.4 0.4 0.4 1"/>
+    <material class="iiwa" name="light_gray" rgba="0.6 0.6 0.6 1"/>
+    <material class="iiwa" name="black" rgba="0 0 0 1"/>
+    <material class="iiwa" name="orange" rgba="1 0.423529 0.0392157 1"/>
+
+    <mesh file="../../meshes/iiwa14/link_0.obj"/>
+    <mesh file="../../meshes/iiwa14/link_1.obj"/>
+    <mesh file="../../meshes/iiwa14/link_2_orange.obj"/>
+    <mesh file="../../meshes/iiwa14/link_2_grey.obj"/>
+    <mesh file="../../meshes/iiwa14/link_3.obj"/>
+    <mesh file="../../meshes/iiwa14/band.obj"/>
+    <mesh file="../../meshes/iiwa14/kuka.obj"/>
+    <mesh file="../../meshes/iiwa14/link_4_orange.obj"/>
+    <mesh file="../../meshes/iiwa14/link_4_grey.obj"/>
+    <mesh file="../../meshes/iiwa14/link_5.obj"/>
+    <mesh file="../../meshes/iiwa14/link_6_orange.obj"/>
+    <mesh file="../../meshes/iiwa14/link_6_grey.obj"/>
+    <mesh file="../../meshes/iiwa14/link_7.obj"/>
+  </asset>
+
+  <actuator>
+    <general name="iiwa_joint1" joint="joint1" class="joint1"/>
+    <general name="iiwa_joint2" joint="joint2" class="joint2"/>
+    <general name="iiwa_joint3" joint="joint3" class="joint1"/>
+    <general name="iiwa_joint4" joint="joint4" class="joint2"/>
+    <general name="iiwa_joint5" joint="joint5" class="joint1"/>
+    <general name="iiwa_joint6" joint="joint6" class="joint2"/>
+    <general name="iiwa_joint7" joint="joint7" class="joint3"/>
+  </actuator>
+</mujoco>

@@ -1,0 +1,106 @@
+<mujoco model="peg_insertion">
+  <include file="iiwa_components/iiwa_arm.xml" />
+
+  <asset>
+    <!-- arch assets from assembly_description (absolute paths) -->
+    <mesh name="arch_peg" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_peg.obj"/>
+    <mesh name="arch_hole_vis" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole.obj"/>
+    <mesh name="hole_coll_0" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_000.obj"/>
+    <mesh name="hole_coll_1" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_001.obj"/>
+    <mesh name="hole_coll_2" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_002.obj"/>
+    <mesh name="hole_coll_3" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_003.obj"/>
+    <mesh name="hole_coll_4" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_004.obj"/>
+    <mesh name="hole_coll_5" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_005.obj"/>
+    <mesh name="hole_coll_6" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_006.obj"/>
+    <mesh name="hole_coll_7" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_007.obj"/>
+    <mesh name="hole_coll_8" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_008.obj"/>
+    <mesh name="hole_coll_9" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_009.obj"/>
+    <mesh name="hole_coll_10" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_010.obj"/>
+    <mesh name="hole_coll_11" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_011.obj"/>
+    <mesh name="hole_coll_12" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_012.obj"/>
+    <mesh name="hole_coll_13" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_013.obj"/>
+    <mesh name="hole_coll_14" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_014.obj"/>
+    <mesh name="hole_coll_15" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_015.obj"/>
+    <mesh name="hole_coll_16" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_016.obj"/>
+    <mesh name="hole_coll_17" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_017.obj"/>
+    <mesh name="hole_coll_18" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_018.obj"/>
+    <mesh name="hole_coll_19" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_019.obj"/>
+    <mesh name="hole_coll_20" file="/home/slmc/workspace/assembly_description/urdf/meshes/arch_hole_1/arch_hole_convex_coll_020.obj"/>
+  </asset>
+
+  <worldbody>
+    <!-- work surface -->
+    <body name="table">
+      <geom name="table" type="box" size="0.75 1.25 0.01" pos="0.5 0 -0.01" rgba="0.8 0.8 0.8 1"
+            contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- table that raises the hole to a known pose under the EE. Tabletop surface  -->
+    <!-- is at z=0.2 (same height as the old pedestal); the hole sits on top of it. -->
+    <body name="pedestal">
+      <!-- tabletop: "obstacle" collider (contype=2, conaffinity=1) -> collides with -->
+      <!-- the robot (arm + peg = contype=1, conaffinity=2), not with the hole.       -->
+      <geom name="pedestal" type="box" size="0.15 0.15 0.01" pos="0.5 0 0.19" rgba="0.5 0.5 0.5 1"
+            contype="2" conaffinity="1"/>
+      <!-- four legs from the floor up to the tabletop (visual only) -->
+      <geom name="table_leg_0" type="box" size="0.015 0.015 0.09" pos="0.38 -0.12 0.09" rgba="0.45 0.45 0.45 1"
+            contype="0" conaffinity="0"/>
+      <geom name="table_leg_1" type="box" size="0.015 0.015 0.09" pos="0.38 0.12 0.09" rgba="0.45 0.45 0.45 1"
+            contype="0" conaffinity="0"/>
+      <geom name="table_leg_2" type="box" size="0.015 0.015 0.09" pos="0.62 -0.12 0.09" rgba="0.45 0.45 0.45 1"
+            contype="0" conaffinity="0"/>
+      <geom name="table_leg_3" type="box" size="0.015 0.015 0.09" pos="0.62 0.12 0.09" rgba="0.45 0.45 0.45 1"
+            contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ARCH HOLE at a KNOWN, fixed pose (opening up, +z). Collision = 21 convex   -->
+    <!-- COACD pieces from assembly_description; visual = full arch_hole mesh.       -->
+    <!-- Move this body's pos/quat to change the (known) hole pose.                  -->
+    <body name="hole" pos="0.5 0 0.2" quat="1 0 0 0">
+      <geom name="hole_vis" type="mesh" mesh="arch_hole_vis" class="visual" rgba="0.4 0.4 0.8 1"/>
+      <geom name="hole_collision_0" type="mesh" mesh="hole_coll_0" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_1" type="mesh" mesh="hole_coll_1" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_2" type="mesh" mesh="hole_coll_2" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_3" type="mesh" mesh="hole_coll_3" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_4" type="mesh" mesh="hole_coll_4" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_5" type="mesh" mesh="hole_coll_5" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_6" type="mesh" mesh="hole_coll_6" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_7" type="mesh" mesh="hole_coll_7" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_8" type="mesh" mesh="hole_coll_8" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_9" type="mesh" mesh="hole_coll_9" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_10" type="mesh" mesh="hole_coll_10" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_11" type="mesh" mesh="hole_coll_11" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_12" type="mesh" mesh="hole_coll_12" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_13" type="mesh" mesh="hole_coll_13" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_14" type="mesh" mesh="hole_coll_14" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_15" type="mesh" mesh="hole_coll_15" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_16" type="mesh" mesh="hole_coll_16" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_17" type="mesh" mesh="hole_coll_17" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_18" type="mesh" mesh="hole_coll_18" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_19" type="mesh" mesh="hole_coll_19" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <geom name="hole_collision_20" type="mesh" mesh="hole_coll_20" group="3" contype="2" conaffinity="1" rgba="0.3 0.3 0.7 1"/>
+      <!-- reward targets, rigidly attached -> encode the known hole pose -->
+      <site name="hole_entrance" pos="0 0 0.05"  size="0.004" rgba="0 1 0 0.7"/>
+      <site name="hole_bottom"   pos="0 0 0.006" size="0.004" rgba="1 0 0 0.7"/>
+      <!-- visual-only marker (the judo viewer renders geoms, not sites): GREEN sphere -->
+      <!-- at hole_bottom -- this is the goal the (red) peg tip is driven toward.      -->
+      <geom name="hole_bottom_marker" type="sphere" size="0.01" pos="0 0 0.006"
+            contype="0" conaffinity="0" rgba="0 1 0 1"/>
+      <!-- RGB orientation triad at the hole frame (x=red, y=green, z=blue), visual -->
+      <!-- only. The hole opens along its local +z, so the blue axis is the          -->
+      <!-- insertion axis the peg shaft is aligned to.                               -->
+      <geom name="hole_axis_x" type="cylinder" fromto="0 0 0.006 0.06 0 0.006" size="0.0035"
+            contype="0" conaffinity="0" rgba="1 0 0 1"/>
+      <geom name="hole_axis_y" type="cylinder" fromto="0 0 0.006 0 0.06 0.006" size="0.0035"
+            contype="0" conaffinity="0" rgba="0 1 0 1"/>
+      <geom name="hole_axis_z" type="cylinder" fromto="0 0 0.006 0 0 0.066" size="0.0035"
+            contype="0" conaffinity="0" rgba="0 0 1 1"/>
+    </body>
+
+    <!-- KUKA iiwa14 arm (Menagerie components). Peg is welded to link7 in the     -->
+    <!-- task's _process_spec hook (rigid child body of 'link7').                  -->
+    <body name="iiwa">
+      <include file="iiwa_components/iiwa_no_tool.xml" />
+    </body>
+  </worldbody>
+</mujoco>

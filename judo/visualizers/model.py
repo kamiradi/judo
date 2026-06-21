@@ -79,6 +79,10 @@ class ViserMjModel:
         # Assume first body is root of kinematic tree.
         self._bodies = [self._target.scene.add_frame(self._spec.bodies[0].name, show_axes=False)]
         self._geoms: List = []
+        # Geoms matching ``geom_exclude_substring`` (e.g. collision geoms) are still added
+        # to the scene but start hidden; ``set_excluded_visible`` toggles them so the GUI
+        # can show/hide collision geometry on demand.
+        self._excluded_geoms: List = []
 
         # Show world plane if desired.
         if show_ground_plane:
@@ -92,9 +96,11 @@ class ViserMjModel:
 
             for geom in body.geoms:
                 geom_name = f"{body_name}/geom_{geom.name}"
-                if geom_exclude_substring and geom_exclude_substring in geom_name:
-                    continue
                 self.add_geom(geom_name, geom)
+                if geom_exclude_substring and geom_exclude_substring in geom_name:
+                    handle = self._geoms[-1]
+                    handle.visible = False
+                    self._excluded_geoms.append(handle)
 
         # Add traces
         self._num_trace_sensors = count_trace_sensors(self._model)
@@ -294,6 +300,11 @@ class ViserMjModel:
                 set_segment_points(self._traces[0], traces[:all_traces_rollout_size, :, :])
                 if num_traces > all_traces_rollout_size and len(self._traces) > 1:
                     set_segment_points(self._traces[1], traces[all_traces_rollout_size:, :, :])
+
+    def set_excluded_visible(self, visible: bool) -> None:
+        """Show or hide the excluded (e.g. collision) geoms in the viewer."""
+        for geom in self._excluded_geoms:
+            geom.visible = visible
 
     def remove(self) -> None:
         """Wrapper function to remove all geometries from Viser."""

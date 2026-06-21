@@ -1,0 +1,35 @@
+<mujoco model="fr3_arm_only">
+  <compiler angle="radian"/>
+  <option integrator="implicitfast" timestep="0.004" impratio="10.0"/>
+
+  <default>
+    <default class="fr3">
+      <!-- Overwritten in joints 5, 6, and 7. -->
+      <joint damping="0.21" armature="0.195" frictionloss="1.137"/>
+      <position inheritrange="1"/>
+
+      <!-- constraint stiffness -->
+      <geom solimp="0.98 0.99 0.01 0.001 1" solref="0.001 1" friction=".5"/>
+
+      <default class="visual">
+        <geom type="mesh" group="2" contype="0" conaffinity="0"/>
+      </default>
+      <!-- Arm collision geoms are disabled (contype/conaffinity=0): the only       -->
+      <!-- contact that matters for this task is peg<->hole, which keeps MPC fast.   -->
+      <default class="collision">
+        <geom type="mesh" group="3" mass="0" density="0" contype="0" conaffinity="0"/>
+      </default>
+      <site size="0.001" rgba="0.5 0.5 0.5 0.3" group="4"/>
+    </default>
+  </default>
+
+  <actuator>
+    <position class="fr3" name="fr3_joint1" joint="fr3_joint1" kp="4500" kv="450"/>
+    <position class="fr3" name="fr3_joint2" joint="fr3_joint2" kp="4500" kv="450"/>
+    <position class="fr3" name="fr3_joint3" joint="fr3_joint3" kp="3500" kv="350"/>
+    <position class="fr3" name="fr3_joint4" joint="fr3_joint4" kp="3500" kv="350"/>
+    <position class="fr3" name="fr3_joint5" joint="fr3_joint5" kp="2000" kv="200"/>
+    <position class="fr3" name="fr3_joint6" joint="fr3_joint6" kp="2000" kv="200"/>
+    <position class="fr3" name="fr3_joint7" joint="fr3_joint7" kp="2000" kv="200"/>
+  </actuator>
+</mujoco>

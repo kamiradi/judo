@@ -240,6 +240,15 @@ class Visualizer:
                     sim_pause_button.label = "Pause Simulation"
                     self.sim_pause_updated.set()
 
+        # checkbox to toggle visibility of collision geometry in the viewer
+        show_collision = self.server.gui.add_checkbox("Show Collision Geometry", initial_value=False)
+        self.gui_elements["show_collision"] = show_collision
+
+        @show_collision.on_update
+        def _(_: viser.GuiEvent) -> None:
+            """Callback for toggling collision geometry visibility."""
+            self.viser_model.set_excluded_visible(show_collision.value)
+
         # create a display for plan time
         self.gui_elements["plan_time_display"] = self.server.gui.add_number(
             "plan time (ms)",

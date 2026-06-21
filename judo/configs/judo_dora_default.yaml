@@ -15,6 +15,9 @@ dataflow:
         task_reset:
           source: visualization/task_reset
           queue_size: 1
+        task_config:
+          source: visualization/task_config
+          queue_size: 1
         controls:
           source: controller/controls
           queue_size: 1
