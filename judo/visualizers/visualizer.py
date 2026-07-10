@@ -112,6 +112,7 @@ class Visualizer:
         self.viser_model = ViserMjModel(
             self.server,
             self.task.spec,
+            show_ground_plane=False,
             geom_exclude_substring=self.geom_exclude_substring,
         )
 

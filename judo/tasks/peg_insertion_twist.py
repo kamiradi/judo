@@ -118,7 +118,7 @@ RECTANGLE_GEOMETRY = PegHoleGeometry(
     # near-zero-clearance) shape, so the collider is wider than the hole opening and the
     # peg jams at the entrance. Thin the cross-section (peg-local X/Z) to restore
     # clearance; keep the shaft length (Y) so the peg-tip site still marks the real tip.
-    peg_coll_scale=(0.90, 1.0, 0.90),
+    peg_coll_scale=(0.85, 1.0, 0.85),
 )
 
 
