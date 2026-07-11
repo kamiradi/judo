@@ -156,7 +156,10 @@ class PegInsertionTwistConfig(TaskConfig):
     # provided or w_contact == 0. The penalty is a Gaussian bump exp(-0.5*(d_xy/r)^2) that
     # peaks at the hotspot, so keep w_contact small and contact_radius tight or it will
     # fight the hole-centering costs and stall the insertion.
-    w_contact: float = 5.0  # weight of the lateral contact-repulsion bump
+    # DEFAULT 0: the contact signal now shapes the sampling KERNEL (anisotropic covariance)
+    # instead of the reward -- adding it as a cost too gave the robot conflicting signals.
+    # Set >0 only to deliberately re-enable the reward-space repulsion term.
+    w_contact: float = 0.0  # weight of the lateral contact-repulsion bump
     contact_radius: float = 0.006  # m; Gaussian radius of the repulsion (sigma)
     # Runtime pose of the hole carriage, as offsets from the nominal hole pose
     # (world (0.5, 0, 0.2)). Driven by GUI sliders and written into the hole carriage

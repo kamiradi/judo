@@ -100,3 +100,19 @@ def set_default_fr3_pick_overrides() -> None:
             "control_freq": 20.0,
         },
     )
+
+
+def set_default_peg_insertion_overrides() -> None:
+    """Sets the default controller config overrides for the peg-insertion tasks.
+
+    Raise ``max_num_traces`` well above the optimizer's ``num_rollouts`` so the viewer
+    draws *every* rollout's peg-tip trace (one best in yellow, the rest in pink) instead
+    of only the top few elites. This is heavier on the viewer but useful for inspecting
+    the full sampled distribution during insertion.
+    """
+    for task_name in ("peg_insertion", "peg_insertion_twist", "peg_insertion_twist_rectangle"):
+        set_config_overrides(
+            task_name,
+            ControllerConfig,
+            {"max_num_traces": 1000},  # >= num_rollouts -> draw all rollout traces
+        )
