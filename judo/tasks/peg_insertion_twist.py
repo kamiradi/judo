@@ -26,10 +26,14 @@ import numpy as np
 from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
+from judo.tasks.descriptions import get_description_path
 from judo.tasks.peg_insertion import GOAL_OFFSET_QUAT, _add_frame_triad, _quat_mul
 
 XML_PATH = str(MODEL_PATH / "xml/peg_insertion_twist.xml")
-MESH_ROOT = "/home/slmc/workspace/assembly_description/urdf/meshes"
+# Peg/hole meshes live in the standalone assembly_description repo, cloned once into a shared
+# local cache on first import (see judo.tasks.descriptions). Tracks the latest commit unless
+# ROBOT_DESCRIPTION_COMMIT pins one.
+MESH_ROOT = f"{get_description_path('assembly_description')}/urdf/meshes"
 
 # Home twist: zero velocity (the peg holds its starting pose hovering over the hole).
 NU = 6  # [vx, vy, vz, wx, wy, wz]
@@ -61,6 +65,13 @@ PEG_LINK_QUAT_IN_PEG = list(_quat_mul(_PEG_BODY_TO_PEG_LINK_BASE, _RZ180))  # ->
 # Goal orientation re-expressed in the peg_link convention (== GOAL_OFFSET_QUAT (x) the above)
 # so the SO(3) alignment cost is unchanged in behavior now that the tip lives in peg_link.
 GOAL_OFFSET_QUAT_PEGLINK = _quat_mul(np.asarray(GOAL_OFFSET_QUAT), np.asarray(PEG_LINK_QUAT_IN_PEG))
+
+# Success thresholds (see ``PegInsertionTwist.success``). The peg counts as inserted once
+# its tip is at least this fraction of the way from the hole entrance down to the bottom,
+# AND it is laterally centered on the hole axis to within this tolerance (so a tip that
+# merely brushes past the rim at depth does not register as success).
+SUCCESS_DEPTH_FRAC = 0.9  # fraction of the entrance->bottom span the tip must pass
+SUCCESS_LATERAL_TOL = 0.004  # m; max off-axis distance of the tip while inserted
 
 
 @dataclass(frozen=True)
@@ -118,7 +129,50 @@ RECTANGLE_GEOMETRY = PegHoleGeometry(
     # near-zero-clearance) shape, so the collider is wider than the hole opening and the
     # peg jams at the entrance. Thin the cross-section (peg-local X/Z) to restore
     # clearance; keep the shaft length (Y) so the peg-tip site still marks the real tip.
-    peg_coll_scale=(0.85, 1.0, 0.85),
+    peg_coll_scale=(0.90, 1.0, 0.90),
+)
+
+ELLIPSE_GEOMETRY = PegHoleGeometry(
+    name="ellipse",
+    peg_vis=f"{MESH_ROOT}/ellipse_peg.obj",
+    peg_coll_dir=f"{MESH_ROOT}/ellipse_peg",
+    peg_coll_prefix="ellipse_peg_convex_coll",
+    peg_num_coll=16,
+    hole_vis=f"{MESH_ROOT}/ellipse_hole.obj",
+    hole_coll_dir=f"{MESH_ROOT}/ellipse_hole",
+    hole_coll_prefix="ellipse_hole_convex_coll",
+    hole_num_coll=18,
+    peg_coll_scale=(0.90, 1.0, 0.90),
+)
+
+ELLIPSE_TEETH_GEOMETRY = PegHoleGeometry(
+    name="ellipse_teeth",
+    peg_vis=f"{MESH_ROOT}/ellipse_peg_teeth.obj",
+    peg_coll_dir=f"{MESH_ROOT}/ellipse_peg_teeth",
+    peg_coll_prefix="ellipse_peg_teeth_convex_coll",
+    peg_num_coll=17,
+    hole_vis=f"{MESH_ROOT}/ellipse_hole_teeth.obj",
+    hole_coll_dir=f"{MESH_ROOT}/ellipse_hole_teeth",
+    hole_coll_prefix="ellipse_hole_teeth_convex_coll",
+    hole_num_coll=29,
+    peg_coll_scale=(0.90, 1.0, 0.90),
+)
+
+RECTANGLE_TEETH_GEOMETRY = PegHoleGeometry(
+    name="rectangle_teeth",
+    peg_vis=f"{MESH_ROOT}/rectangle_peg_teeth.obj",
+    peg_coll_dir=f"{MESH_ROOT}/rectangle_peg_teeth",
+    peg_coll_prefix="rectangle_peg_teeth_convex_coll",
+    peg_num_coll=20,
+    hole_vis=f"{MESH_ROOT}/rectangle_hole_teeth.obj",
+    hole_coll_dir=f"{MESH_ROOT}/rectangle_hole_teeth",
+    hole_coll_prefix="rectangle_hole_teeth_convex_coll",
+    hole_num_coll=22,
+    # Thinned less than the toothless shapes: the teeth stick out laterally, and mesh scale
+    # is about the mesh origin, so the thin both shrinks each tooth and pulls it toward the
+    # shaft axis. At 0.90 that loosens the tooth engagement well past the ~1 mm hull
+    # inflation it corrects for; 0.95 keeps entrance clearance with the teeth still meshing.
+    peg_coll_scale=(0.95, 1.0, 0.95),
 )
 
 
@@ -128,7 +182,7 @@ RECTANGLE_GEOMETRY = PegHoleGeometry(
 @slider("w_tilt", 0.0, 200.0, 1.0)
 @slider("tilt_limit_deg", 0.0, 90.0, 1.0)
 @slider("w_qvel", 0.0, 1.0, 0.005)
-@slider("approach_tol", 0.001, 0.05, 0.001)
+@slider("approach_tol", 0.001, 0.2, 0.001)
 @slider("w_contact", 0.0, 50.0, 0.5)
 @slider("contact_radius", 0.002, 0.05, 0.001)
 @slider("hole_x", -0.2, 0.2, 0.005)
@@ -428,6 +482,36 @@ class PegInsertionTwist(Task[PegInsertionTwistConfig]):
 
         return -cost.sum(axis=-1)  # (R,)
 
+    def success(self, model: mujoco.MjModel, data: mujoco.MjData, metadata: dict[str, Any] | None = None) -> bool:
+        """True once the peg tip is inserted deep enough AND centered on the hole axis.
+
+        Uses the same world-frame sites as ``reward``: the hole axis is entrance->bottom,
+        the tip's signed height above the bottom is projected onto it, and insertion depth
+        is measured downward from the entrance. Success requires the tip to be at least
+        ``SUCCESS_DEPTH_FRAC`` of the way to the bottom while staying within
+        ``SUCCESS_LATERAL_TOL`` of the axis, so a tip skimming past the rim doesn't count.
+
+        Instantaneous by design (like the other tasks' ``success``); any debouncing /
+        consecutive-frame hold belongs to the caller.
+        """
+        s = data.sensordata
+        tip = s[self.tip_adr : self.tip_adr + 3]
+        entrance = s[self.entrance_adr : self.entrance_adr + 3]
+        bottom = s[self.bottom_adr : self.bottom_adr + 3]
+
+        span = entrance - bottom  # hole axis, entrance is "up/out"
+        depth_total = float(np.linalg.norm(span))
+        if depth_total < 1e-9:  # degenerate geometry -> never "succeed"
+            return False
+        hole_axis = span / depth_total
+
+        vec = tip - bottom
+        axial = float(np.dot(vec, hole_axis))  # tip height above the bottom
+        lateral_dist = float(np.linalg.norm(vec - axial * hole_axis))
+
+        inserted_frac = (depth_total - axial) / depth_total  # 0 at entrance, 1 at bottom
+        return bool(inserted_frac >= SUCCESS_DEPTH_FRAC and lateral_dist <= SUCCESS_LATERAL_TOL)
+
     def pre_sim_step(self) -> None:
         """Hold the hole carriage at the slider-commanded pose each sim step."""
         self._apply_hole_pose()
@@ -446,3 +530,24 @@ class PegInsertionTwistRectangle(PegInsertionTwist):
 
     name: str = "peg_insertion_twist_rectangle"
     geometry: PegHoleGeometry = RECTANGLE_GEOMETRY
+
+
+class PegInsertionTwistEllipse(PegInsertionTwist):
+    """Twist-controlled peg insertion using the elliptical peg/hole shape."""
+
+    name: str = "peg_insertion_twist_ellipse"
+    geometry: PegHoleGeometry = ELLIPSE_GEOMETRY
+
+
+class PegInsertionTwistEllipseTeeth(PegInsertionTwist):
+    """Twist-controlled peg insertion using the toothed elliptical peg/hole shape."""
+
+    name: str = "peg_insertion_twist_ellipse_teeth"
+    geometry: PegHoleGeometry = ELLIPSE_TEETH_GEOMETRY
+
+
+class PegInsertionTwistRectangleTeeth(PegInsertionTwist):
+    """Twist-controlled peg insertion using the toothed rectangular peg/hole shape."""
+
+    name: str = "peg_insertion_twist_rectangle_teeth"
+    geometry: PegHoleGeometry = RECTANGLE_TEETH_GEOMETRY

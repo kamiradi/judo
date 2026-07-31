@@ -14,7 +14,10 @@ from judo.tasks.peg_insertion import PegInsertion, PegInsertionConfig
 from judo.tasks.peg_insertion_twist import (
     PegInsertionTwist,
     PegInsertionTwistConfig,
+    PegInsertionTwistEllipse,
+    PegInsertionTwistEllipseTeeth,
     PegInsertionTwistRectangle,
+    PegInsertionTwistRectangleTeeth,
 )
 from judo.tasks.spot import (
     SpotBase,
@@ -52,6 +55,9 @@ _registered_tasks: Dict[str, TaskRegistration] = {
     PegInsertion.name: TaskRegistration(PegInsertion, PegInsertionConfig),
     PegInsertionTwist.name: TaskRegistration(PegInsertionTwist, PegInsertionTwistConfig),
     PegInsertionTwistRectangle.name: TaskRegistration(PegInsertionTwistRectangle, PegInsertionTwistConfig),
+    PegInsertionTwistEllipse.name: TaskRegistration(PegInsertionTwistEllipse, PegInsertionTwistConfig),
+    PegInsertionTwistEllipseTeeth.name: TaskRegistration(PegInsertionTwistEllipseTeeth, PegInsertionTwistConfig),
+    PegInsertionTwistRectangleTeeth.name: TaskRegistration(PegInsertionTwistRectangleTeeth, PegInsertionTwistConfig),
     SpotBase.name: TaskRegistration(
         SpotBase,
         SpotBaseConfig,
@@ -144,7 +150,10 @@ __all__ = [
     "PegInsertionConfig",
     "PegInsertionTwist",
     "PegInsertionTwistConfig",
+    "PegInsertionTwistEllipse",
+    "PegInsertionTwistEllipseTeeth",
     "PegInsertionTwistRectangle",
+    "PegInsertionTwistRectangleTeeth",
     "SpotBase",
     "SpotBaseConfig",
     "SpotBoxPush",

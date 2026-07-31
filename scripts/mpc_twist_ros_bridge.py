@@ -213,7 +213,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--host", default="127.0.0.1", help="rosbridge_server host")
     p.add_argument("--port", type=int, default=9090, help="rosbridge_server websocket port")
-    p.add_argument("--task", default="peg_insertion_twist", help="judo task name")
+    p.add_argument("--task", default="peg_insertion_twist_rectangle", help="judo task name")
     p.add_argument("--optimizer", default="ps", choices=["ps", "cem", "mppi"], help="judo optimizer")
     p.add_argument("--ns", default="/yang", help="robot namespace used by the action servers")
     p.add_argument("--twist-topic", default="/twist_input", help="geometry_msgs/Twist sink the server reads")
