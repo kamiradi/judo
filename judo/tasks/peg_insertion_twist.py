@@ -26,13 +26,14 @@ import numpy as np
 from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
-from judo.tasks.descriptions import get_description_path
+from judo.descriptions import get_description_path
 from judo.tasks.peg_insertion import GOAL_OFFSET_QUAT, _add_frame_triad, _quat_mul
 
 XML_PATH = str(MODEL_PATH / "xml/peg_insertion_twist.xml")
-# Peg/hole meshes live in the standalone assembly_description repo, cloned once into a shared
-# local cache on first import (see judo.tasks.descriptions). Tracks the latest commit unless
-# ROBOT_DESCRIPTION_COMMIT pins one.
+# Peg/hole meshes live in the standalone assembly_description repo, in a shared local cache.
+# This is a cache LOOKUP, not a fetch -- warm the cache once with `python -m judo.descriptions`
+# (importing this module raises if it is cold), so a sweep's N workers don't each re-clone.
+# Tracks the latest commit unless ROBOT_DESCRIPTION_COMMIT pins one.
 MESH_ROOT = f"{get_description_path('assembly_description')}/urdf/meshes"
 
 # Home twist: zero velocity (the peg holds its starting pose hovering over the hole).
@@ -72,6 +73,10 @@ GOAL_OFFSET_QUAT_PEGLINK = _quat_mul(np.asarray(GOAL_OFFSET_QUAT), np.asarray(PE
 # merely brushes past the rim at depth does not register as success).
 SUCCESS_DEPTH_FRAC = 0.9  # fraction of the entrance->bottom span the tip must pass
 SUCCESS_LATERAL_TOL = 0.004  # m; max off-axis distance of the tip while inserted
+# The toothed geometries mesh their teeth well before the tip nears the bottom, so a 0.9
+# depth gate reports failure for insertions that are mechanically seated. They override the
+# depth fraction (via ``PegInsertionTwist.success_depth_frac``); the lateral gate is unchanged.
+TEETH_SUCCESS_DEPTH_FRAC = 0.4
 
 
 @dataclass(frozen=True)
@@ -107,11 +112,21 @@ ARCH_GEOMETRY = PegHoleGeometry(
     peg_vis=f"{MESH_ROOT}/arch_peg.obj",
     peg_coll_dir=f"{MESH_ROOT}/arch_peg",
     peg_coll_prefix="arch_peg_convex_coll",
-    peg_num_coll=18,
-    hole_vis=f"{MESH_ROOT}/arch_hole.obj",
+    # 61 = the 0.02-threshold decomposition from commit 179df3d (was 18). Undercounting here is
+    # silent -- only the first N hulls get attached, leaving the peg partly non-colliding.
+    peg_num_coll=61,
+    # Render the thread-free arch hole: the threads are visual clutter and the collider
+    # (arch_hole_1) does not model them anyway.
+    hole_vis=f"{MESH_ROOT}/arch_hole_no_threads.obj",
     hole_coll_dir=f"{MESH_ROOT}/arch_hole_1",
     hole_coll_prefix="arch_hole_convex_coll",
-    hole_num_coll=21,
+    # Piece count tracks the mesh repo: re-check it after pulling assembly_description (it has
+    # been 21 / 10 / 454 / 15 / 67 across re-runs of COACD on the arch hole).
+    # 17 = commit e9842e8 ("arch no threads hole dims increased").
+    hole_num_coll=17,
+    # hole_coll_dir=f"{MESH_ROOT}/arch_hole_1mm",
+    # hole_coll_prefix="arch_hole_1mm_convex_coll",
+    # hole_num_coll=26,
 )
 
 RECTANGLE_GEOMETRY = PegHoleGeometry(
@@ -229,6 +244,8 @@ class PegInsertionTwist(Task[PegInsertionTwistConfig]):
     """Peg-in-hole insertion where the peg is driven directly by an end-effector twist."""
 
     name: str = "peg_insertion_twist"
+    # Depth gate used by ``success``; per-geometry so the toothed shapes can seat shallower.
+    success_depth_frac: float = SUCCESS_DEPTH_FRAC
     config_t: type[PegInsertionTwistConfig] = PegInsertionTwistConfig
     # peg/hole shape used to build the model; override in subclasses for other shapes.
     geometry: PegHoleGeometry = ARCH_GEOMETRY
@@ -488,7 +505,7 @@ class PegInsertionTwist(Task[PegInsertionTwistConfig]):
         Uses the same world-frame sites as ``reward``: the hole axis is entrance->bottom,
         the tip's signed height above the bottom is projected onto it, and insertion depth
         is measured downward from the entrance. Success requires the tip to be at least
-        ``SUCCESS_DEPTH_FRAC`` of the way to the bottom while staying within
+        ``self.success_depth_frac`` of the way to the bottom while staying within
         ``SUCCESS_LATERAL_TOL`` of the axis, so a tip skimming past the rim doesn't count.
 
         Instantaneous by design (like the other tasks' ``success``); any debouncing /
@@ -510,7 +527,7 @@ class PegInsertionTwist(Task[PegInsertionTwistConfig]):
         lateral_dist = float(np.linalg.norm(vec - axial * hole_axis))
 
         inserted_frac = (depth_total - axial) / depth_total  # 0 at entrance, 1 at bottom
-        return bool(inserted_frac >= SUCCESS_DEPTH_FRAC and lateral_dist <= SUCCESS_LATERAL_TOL)
+        return bool(inserted_frac >= self.success_depth_frac and lateral_dist <= SUCCESS_LATERAL_TOL)
 
     def pre_sim_step(self) -> None:
         """Hold the hole carriage at the slider-commanded pose each sim step."""
@@ -544,6 +561,7 @@ class PegInsertionTwistEllipseTeeth(PegInsertionTwist):
 
     name: str = "peg_insertion_twist_ellipse_teeth"
     geometry: PegHoleGeometry = ELLIPSE_TEETH_GEOMETRY
+    success_depth_frac: float = TEETH_SUCCESS_DEPTH_FRAC
 
 
 class PegInsertionTwistRectangleTeeth(PegInsertionTwist):
@@ -551,3 +569,4 @@ class PegInsertionTwistRectangleTeeth(PegInsertionTwist):
 
     name: str = "peg_insertion_twist_rectangle_teeth"
     geometry: PegHoleGeometry = RECTANGLE_TEETH_GEOMETRY
+    success_depth_frac: float = TEETH_SUCCESS_DEPTH_FRAC
