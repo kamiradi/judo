@@ -121,9 +121,10 @@ ARCH_GEOMETRY = PegHoleGeometry(
     hole_coll_dir=f"{MESH_ROOT}/arch_hole_1",
     hole_coll_prefix="arch_hole_convex_coll",
     # Piece count tracks the mesh repo: re-check it after pulling assembly_description (it has
-    # been 21 / 10 / 454 / 15 / 67 across re-runs of COACD on the arch hole).
-    # 17 = commit e9842e8 ("arch no threads hole dims increased").
-    hole_num_coll=17,
+    # been 21 / 10 / 454 / 15 / 67 / 17 / 13 across re-runs of COACD on the arch hole).
+    # 31 = the current arch_hole_1 contents (was 37, which pointed at pieces 031-036 that
+    # no longer exist and made the spec fail to compile).
+    hole_num_coll=31,
     # hole_coll_dir=f"{MESH_ROOT}/arch_hole_1mm",
     # hole_coll_prefix="arch_hole_1mm_convex_coll",
     # hole_num_coll=26,
