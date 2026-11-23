@@ -11,7 +11,7 @@ from omegaconf import DictConfig
 from scipy.interpolate import interp1d
 
 from judo.app.structs import MujocoState, SplineData
-from judo.app.utils import register_optimizers_from_cfg, register_tasks_from_cfg
+from judo.app.utils import get_class_from_string, register_optimizers_from_cfg, register_tasks_from_cfg
 from judo.config import OverridableConfig
 from judo.gui import slider
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
@@ -172,6 +172,11 @@ class Controller:
         return np.linspace(0, self.horizon, self.optimizer_cfg.num_nodes, endpoint=True)
 
     @property
+    def num_rollout_threads(self) -> int:
+        """Number of parallel rollouts simulated per optimization iteration (one per sampled control by default)."""
+        return self.optimizer_cfg.num_rollouts
+
+    @property
     def optimizer_cfg(self) -> OptimizerConfig:
         """Helper function to get the optimizer config."""
         return self.optimizer.config
@@ -235,19 +240,7 @@ class Controller:
         while i < self.max_opt_iters and not self.optimizer.stop_cond():
             self.rollout_controls = self._sample_controls()
             self._pre_rollout()
-
-            # Convert task-space controls to sim-space for rollout backend
-            sim_controls = self.task.task_to_sim_ctrl(self.rollout_controls)
-
-            # Roll out dynamics
-            self.states, self.sensors, policy_output = self.rollout_backend.rollout(
-                self.current_state,
-                sim_controls,
-                self._last_policy_output,
-            )
-            if policy_output is not None:
-                self._last_policy_output = policy_output
-
+            self._rollout()
             self._post_rollout()
             self._update_iteration()
             i += 1
@@ -269,13 +262,13 @@ class Controller:
         self._nominal_knots_normalized = self.action_normalizer.normalize(nominal_knots)
 
         # Resizing rollout backend due to changes in num_rollouts (e.g., from GUI)
-        if self.rollout_backend.num_threads != self.optimizer_cfg.num_rollouts:
+        if self.rollout_backend.num_threads != self.num_rollout_threads:
             # Preserve num_problems when updating shared backend (warp), or just num_threads (CPU)
             num_problems = getattr(self.rollout_backend, "num_problems", None)
             if num_problems is not None:
-                self.rollout_backend.update(self.optimizer_cfg.num_rollouts, num_problems)  # type: ignore[call-arg]
+                self.rollout_backend.update(self.num_rollout_threads, num_problems)  # type: ignore[call-arg]
             else:
-                self.rollout_backend.update(self.optimizer_cfg.num_rollouts)
+                self.rollout_backend.update(self.num_rollout_threads)
             if self._last_policy_output is not None:
                 self._last_policy_output = None
 
@@ -316,6 +309,20 @@ class Controller:
     def _pre_rollout(self) -> None:
         """Pre-rollout phase: prepare task for rollout."""
         self.task.pre_rollout(self.current_state)
+
+    def _rollout(self) -> None:
+        """Rollout phase: simulate the sampled controls from the current state."""
+        # Convert task-space controls to sim-space for rollout backend
+        sim_controls = self.task.task_to_sim_ctrl(self.rollout_controls)
+
+        # Roll out dynamics
+        self.states, self.sensors, policy_output = self.rollout_backend.rollout(
+            self.current_state,
+            sim_controls,
+            self._last_policy_output,
+        )
+        if policy_output is not None:
+            self._last_policy_output = policy_output
 
     def _post_rollout(self) -> None:
         """Post-rollout phase: process rollout results and compute rewards."""
@@ -455,7 +462,7 @@ class Controller:
 
         final_kwargs = {
             "model": self.model,
-            "num_threads": self.optimizer_cfg.num_rollouts,
+            "num_threads": self.num_rollout_threads,
         }
         final_kwargs.update(backend_kwargs or {})
 
@@ -782,6 +789,8 @@ def make_controller(
     controller_cfg = ControllerConfig()
     controller_cfg.set_override(init_task)
 
+    if controller_cls is None and task_registration.controller_cls is not None:
+        controller_cls = get_class_from_string(task_registration.controller_cls)
     cls = controller_cls or Controller
     return cls(
         controller_config=controller_cfg,

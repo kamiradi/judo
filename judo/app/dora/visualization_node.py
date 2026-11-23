@@ -134,6 +134,16 @@ class VisualizationNode(DoraNode):
         with self.visualizer.task_lock:
             self.visualizer.viser_model.set_traces(traces, all_traces_rollout_size)
 
+    @on_event("INPUT", "belief")
+    def update_belief(self, event: dict) -> None:
+        """Callback to render belief particles as transparent object geometries."""
+        geom_name = getattr(self.visualizer.task, "belief_geom_name", None)
+        if geom_name is None:
+            return
+        belief = event["value"].to_numpy().reshape(-1, 3)
+        with self.visualizer.task_lock:
+            self.visualizer.viser_model.set_belief(belief[:, :2], belief[:, 2], geom_name)
+
     @on_event("INPUT", "plan_time")
     def update_plan_time(self, event: dict) -> None:
         """Callback to update plan time on receiving a new plan time measurement."""

@@ -6,14 +6,15 @@ from judo.controller.controller import ControllerConfig
 
 def set_default_cylinder_push_overrides() -> None:
     """Sets the default task-specific controller config overrides for the cylinder push task."""
-    set_config_overrides(
-        "cylinder_push",
-        ControllerConfig,
-        {
-            "horizon": 1.0,
-            "spline_order": "zero",
-        },
-    )
+    for task_name in ("cylinder_push", "uncertain_cylinder_push"):
+        set_config_overrides(
+            task_name,
+            ControllerConfig,
+            {
+                "horizon": 1.0,
+                "spline_order": "zero",
+            },
+        )
 
 
 def set_default_cartpole_overrides() -> None:

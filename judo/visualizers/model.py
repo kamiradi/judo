@@ -83,6 +83,7 @@ class ViserMjModel:
         # to the scene but start hidden; ``set_excluded_visible`` toggles them so the GUI
         # can show/hide collision geometry on demand.
         self._excluded_geoms: List = []
+        self._belief_handle: Any = None
 
         # Show world plane if desired.
         if show_ground_plane:
@@ -301,6 +302,48 @@ class ViserMjModel:
                 if num_traces > all_traces_rollout_size and len(self._traces) > 1:
                     set_segment_points(self._traces[1], traces[all_traces_rollout_size:, :, :])
 
+    def set_belief(
+        self, xy: np.ndarray, weights: np.ndarray, geom_name: str, rgb: Tuple[int, int, int] = (255, 140, 0)
+    ) -> None:
+        """Render planar belief particles as transparent copies of a (cylinder) geom, opacity scaled by weight.
+
+        Args:
+            xy: Particle positions, shape (N, 2).
+            weights: Particle weights, shape (N,).
+            geom_name: Name of the cylinder geom whose geometry represents the uncertain object.
+            rgb: Particle color.
+        """
+        num = len(xy)
+        if self._belief_handle is None or len(self._belief_handle.batched_positions) != num:
+            if self._belief_handle is not None:
+                self._belief_handle.remove()
+            geom = self._model.geom(geom_name)
+            assert geom.type[0] == mujoco.mjtGeom.mjGEOM_CYLINDER, "belief rendering supports cylinder geoms"
+            mesh = cylinder(geom.size[0], 2 * geom.size[1])
+            self._belief_z = float(self._model.body_pos[geom.bodyid[0]][2] + geom.pos[2])
+            self._belief_handle = self._target.scene.add_batched_meshes_simple(
+                "/belief_particles",
+                mesh.vertices,
+                mesh.faces,
+                batched_wxyzs=np.tile([1.0, 0.0, 0.0, 0.0], (num, 1)),
+                batched_positions=np.zeros((num, 3)),
+                batched_colors=np.array(rgb, dtype=np.uint8),
+                batched_opacities=np.zeros(num),
+                cast_shadow=False,
+                receive_shadow=False,
+            )
+        positions = np.concatenate([xy, np.full((num, 1), self._belief_z)], axis=-1)
+        opacities = np.clip(0.03 + 0.5 * weights / max(float(weights.max()), 1e-12), 0.0, 1.0)
+        with self._target.atomic():
+            self._belief_handle.batched_positions = positions.astype(np.float32)
+            self._belief_handle.batched_opacities = opacities.astype(np.float32)
+
+    def remove_belief(self) -> None:
+        """Remove belief particles."""
+        if self._belief_handle is not None:
+            self._belief_handle.remove()
+            self._belief_handle = None
+
     def set_excluded_visible(self, visible: bool) -> None:
         """Show or hide the excluded (e.g. collision) geoms in the viewer."""
         for geom in self._excluded_geoms:
@@ -311,6 +354,7 @@ class ViserMjModel:
         for geom in self._geoms:
             geom.remove()
         self.remove_traces()
+        self.remove_belief()
 
 
 def add_plane(

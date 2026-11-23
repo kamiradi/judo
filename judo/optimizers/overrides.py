@@ -9,34 +9,35 @@ from judo.optimizers.ps import PredictiveSamplingConfig
 
 def set_default_cylinder_push_overrides() -> None:
     """Sets the default task-specific controller config overrides for the cylinder push task."""
-    set_config_overrides(
-        "cylinder_push",
-        PredictiveSamplingConfig,
-        {
-            "num_nodes": 4,
-            "num_rollouts": 32,
-            "use_noise_ramp": True,
-        },
-    )
-    set_config_overrides(
-        "cylinder_push",
-        CrossEntropyMethodConfig,
-        {
-            "num_nodes": 4,
-            "num_rollouts": 32,
-            "num_elites": 2,
-            "use_noise_ramp": True,
-        },
-    )
-    set_config_overrides(
-        "cylinder_push",
-        MPPIConfig,
-        {
-            "num_nodes": 4,
-            "num_rollouts": 32,
-            "use_noise_ramp": True,
-        },
-    )
+    for task_name in ("cylinder_push", "uncertain_cylinder_push"):
+        set_config_overrides(
+            task_name,
+            PredictiveSamplingConfig,
+            {
+                "num_nodes": 4,
+                "num_rollouts": 32,
+                "use_noise_ramp": True,
+            },
+        )
+        set_config_overrides(
+            task_name,
+            CrossEntropyMethodConfig,
+            {
+                "num_nodes": 4,
+                "num_rollouts": 32,
+                "num_elites": 2,
+                "use_noise_ramp": True,
+            },
+        )
+        set_config_overrides(
+            task_name,
+            MPPIConfig,
+            {
+                "num_nodes": 4,
+                "num_rollouts": 32,
+                "use_noise_ramp": True,
+            },
+        )
 
 
 def set_default_cartpole_overrides() -> None:

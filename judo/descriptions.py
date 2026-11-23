@@ -16,16 +16,17 @@ repo's latest commit and is pulled on each fetch; pin a specific commit only via
 Fetching is explicit and separate from reading, so that a multirun sweep fanning out over N
 worker processes does not clone/pull N times (each worker imports the task module afresh):
 
-* ``fetch_descriptions`` / ``python -m judo.descriptions`` -- the only network call.
-  Run it once, up front (the sweep scripts do).
-* ``get_description_path`` -- pure cache lookup, what task modules call at import. Raises if
-  the cache is cold rather than quietly fetching.
+* ``fetch_descriptions`` / ``python -m judo.descriptions`` -- clones *or pulls* (updates).
+  Run it up front to refresh the cache (the sweep scripts do).
+* ``get_description_path`` -- what task modules call at import. A warm cache is a pure lookup
+  (never pulls); a cold cache is cloned once, atomically, so racing workers are safe.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo
@@ -137,25 +138,47 @@ def clone_to_cache(description_name: str, commit: str | None = None) -> str:
     return str(clone.working_dir)
 
 
-def get_description_path(description_name: str) -> str:
-    """Cached working dir for ``description_name``, WITHOUT any network access.
+def _clone_into_cache_atomically(description_name: str, target_dir: str, commit: str | None) -> None:
+    """Cold-cache clone that is safe when several processes race to populate the same entry.
 
-    The assets must already be in the cache -- warm it once per machine with
-    ``fetch_descriptions`` (``python -m judo.descriptions``). This is what task modules
-    call at import, so importing a task stays offline and instant.
+    Clones into a unique sibling temp dir, then ``os.rename``s it into place. The rename is
+    atomic, so exactly one process wins; losers discard their copy and use the winner's.
+    """
+    repository = _repository(description_name)
+    commit = repository.commit if commit is None else commit
+    parent = os.path.dirname(target_dir)
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(prefix=f".{os.path.basename(target_dir)}-", dir=parent)
+    try:
+        print(f"[descriptions] {description_name!r} not cached, cloning {repository.url} -> {target_dir}")
+        clone = Repo.clone_from(repository.url, tmp_dir)
+        if commit is not None:
+            clone.git.checkout(commit)
+        clone.close()
+        if os.path.exists(target_dir) and not os.path.isdir(os.path.join(target_dir, ".git")):
+            shutil.rmtree(target_dir)  # leftover broken dir, not a valid clone
+        try:
+            os.rename(tmp_dir, target_dir)
+        except OSError:
+            if not os.path.isdir(os.path.join(target_dir, ".git")):
+                raise  # not a lost race -- a real failure
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def get_description_path(description_name: str) -> str:
+    """Cached working dir for ``description_name``, cloning it on first use if missing.
+
+    A warm cache is a pure lookup (no network, no pull), so importing a task stays instant and
+    sweep workers do not re-fetch. A cold cache is cloned once into ``~/.cache/descriptions``;
+    use ``fetch_descriptions`` (``python -m judo.descriptions``) to pull updates explicitly.
 
     Honours ``ROBOT_DESCRIPTION_COMMIT`` for an optional pin, matching the ``assembly`` package.
-
-    Raises:
-        FileNotFoundError: if the description has not been fetched into the cache yet.
     """
     commit = os.environ.get("ROBOT_DESCRIPTION_COMMIT")
     target_dir = _target_dir(description_name, commit)
     if not os.path.isdir(os.path.join(target_dir, ".git")):
-        raise FileNotFoundError(
-            f"description {description_name!r} is not in the cache ({target_dir}).\n"
-            f"Fetch it once with:  python -m judo.descriptions {description_name}"
-        )
+        _clone_into_cache_atomically(description_name, target_dir, commit)
     return target_dir
 
 

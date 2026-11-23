@@ -33,6 +33,9 @@ dataflow:
         traces:
           source: controller/traces
           queue_size: 1
+        belief:
+          source: controller/belief
+          queue_size: 1
         plan_time:
           source: controller/plan_time
           queue_size: 1
@@ -75,6 +78,7 @@ dataflow:
         - controls
         - traces
         - plan_time
+        - belief
 
 node_definitions:
   simulation:

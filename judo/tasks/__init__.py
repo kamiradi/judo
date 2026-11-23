@@ -32,6 +32,7 @@ from judo.tasks.spot import (
     SpotTireUprightConfig,
 )
 from judo.tasks.spot.spot_constants import SPOT_LOCOMOTION_POLICY_PATH
+from judo.tasks.uncertain_cylinder_push import UncertainCylinderPush, UncertainCylinderPushConfig
 
 
 @dataclass(frozen=True)
@@ -43,10 +44,17 @@ class TaskRegistration:
     rollout_backend: str = "mujoco"
     simulation_backend: str = "mujoco"
     locomotion_policy_path: str | None = None
+    controller_cls: str | None = None
+    """Optional import path of a Controller subclass to use for this task (e.g. a belief-aware controller)."""
 
 
 _registered_tasks: Dict[str, TaskRegistration] = {
     CylinderPush.name: TaskRegistration(CylinderPush, CylinderPushConfig),
+    UncertainCylinderPush.name: TaskRegistration(
+        UncertainCylinderPush,
+        UncertainCylinderPushConfig,
+        controller_cls="judo.controller.belief_controller.BeliefAwareController",
+    ),
     Cartpole.name: TaskRegistration(Cartpole, CartpoleConfig),
     FR3Pick.name: TaskRegistration(FR3Pick, FR3PickConfig),
     LeapCube.name: TaskRegistration(LeapCube, LeapCubeConfig),
@@ -116,6 +124,7 @@ def register_task(
     rollout_backend: str = "mujoco",
     simulation_backend: str = "mujoco",
     locomotion_policy_path: str | None = None,
+    controller_cls: str | None = None,
 ) -> None:
     """Registers a new task and its default controller/simulation backends."""
     _registered_tasks[name] = TaskRegistration(
@@ -124,6 +133,7 @@ def register_task(
         rollout_backend=rollout_backend,
         simulation_backend=simulation_backend,
         locomotion_policy_path=locomotion_policy_path,
+        controller_cls=controller_cls,
     )
 
 
@@ -164,4 +174,6 @@ __all__ = [
     "SpotTireRollConfig",
     "SpotTireUpright",
     "SpotTireUprightConfig",
+    "UncertainCylinderPush",
+    "UncertainCylinderPushConfig",
 ]

@@ -4,6 +4,7 @@ import time
 from threading import Lock
 from typing import Callable
 
+import numpy as np
 import pyarrow as pa
 from dora_utils.dataclasses import from_event, to_arrow
 from dora_utils.node import DoraNode, on_event
@@ -133,6 +134,13 @@ class ControllerNode(DoraNode):
                 "shape": self.controller.traces.shape,
             }
             self.node.send_output("traces", pa.array(self.controller.traces.flatten()), metadata=metadata)
+
+        # send belief particles (only belief-aware controllers expose these)
+        belief_viz = getattr(self.controller, "belief_viz", None)
+        belief = belief_viz() if callable(belief_viz) else None
+        if belief is not None:
+            xy, weights = belief
+            self.node.send_output("belief", pa.array(np.concatenate([xy, weights[:, None]], axis=-1).flatten()))
 
     @on_event("INPUT", "states")
     def update_states(self, event: dict) -> None:

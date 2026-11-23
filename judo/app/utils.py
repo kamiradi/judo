@@ -28,6 +28,7 @@ def register_tasks_from_cfg(task_registration_cfg: DictConfig) -> None:
             `rollout_backend`: rollout backend registry key for controllers
             `simulation_backend`: simulation backend registry key for the simulation node
             `locomotion_policy_path`: path to a low-level policy used by hierarchical tasks
+            `controller_cls`: import path to a Controller subclass to use for this task
 
             Example schema:
             {
@@ -41,10 +42,17 @@ def register_tasks_from_cfg(task_registration_cfg: DictConfig) -> None:
     """
     for task_name in task_registration_cfg.keys():
         task_dict = task_registration_cfg.get(task_name, {})
-        allowed_keys = {"task", "config", "rollout_backend", "simulation_backend", "locomotion_policy_path"}
+        allowed_keys = {
+            "task",
+            "config",
+            "rollout_backend",
+            "simulation_backend",
+            "locomotion_policy_path",
+            "controller_cls",
+        }
         assert set(task_dict.keys()).issubset(allowed_keys) and {"task", "config"}.issubset(task_dict.keys()), (
             "Task registration must include 'task' and 'config', and may optionally include "
-            "'rollout_backend', 'simulation_backend', and 'locomotion_policy_path'."
+            "'rollout_backend', 'simulation_backend', 'locomotion_policy_path', and 'controller_cls'."
         )
         assert isinstance(task_dict["task"], str), "Task must be a string path to the task class."
         assert isinstance(task_dict["config"], str), "Task config must be a string path to the config class."
@@ -65,6 +73,7 @@ def register_tasks_from_cfg(task_registration_cfg: DictConfig) -> None:
             rollout_backend=rollout_backend,
             simulation_backend=simulation_backend,
             locomotion_policy_path=locomotion_policy_path,
+            controller_cls=task_dict.get("controller_cls", None),
         )
 
 
