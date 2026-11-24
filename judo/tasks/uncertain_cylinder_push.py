@@ -46,7 +46,7 @@ class UncertainCylinderPushConfig(CylinderPushConfig):
 
     # belief
     num_particles: int = 30
-    num_plan_particles: int = 8
+    num_plan_particles: int = 15
     prior_sigma: float = 0.5
     process_noise: float = 0.002
     # contact observation model / energy
