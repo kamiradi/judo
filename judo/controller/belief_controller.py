@@ -121,6 +121,7 @@ class BeliefAwareController(Controller):
             num_particles,
             self.plan_weights,
             self.system_metadata,
+            belief_std=float(np.sqrt(np.trace(self.belief.cov()))) if self.belief is not None else None,
         )
         # expose one representative rollout per control sequence so traces etc. keep working unchanged
         num_rollouts = self.optimizer_cfg.num_rollouts

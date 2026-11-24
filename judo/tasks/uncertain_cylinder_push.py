@@ -39,6 +39,7 @@ CART_QVEL_IDX = np.array([2, 3])
 @slider("obs_noise", 0.0, 0.1, 0.005)
 @slider("p_flip", 0.0, 0.5, 0.01)
 @slider("info_subsample", 1, 20, 1)
+@slider("info_gate_std", 0.0, 0.5, 0.01)
 @dataclass
 class UncertainCylinderPushConfig(CylinderPushConfig):
     """Config for the uncertain cylinder push task."""
@@ -59,6 +60,8 @@ class UncertainCylinderPushConfig(CylinderPushConfig):
     # belief-aware planning
     w_info: float = 1.0
     info_subsample: int = 5
+    # the info term is off while the belief std is below info_gate_std and ramps to full strength at 2x that
+    info_gate_std: float = 0.05
     obs_window: int = 100
 
 
@@ -158,6 +161,13 @@ class UncertainCylinderPush(CylinderPush):
             process_noise=self.config.process_noise,
         )
 
+    def info_weight(self, belief_std: float | None) -> float:
+        """Effective info weight: 0 below info_gate_std, linear ramp up to w_info at 2 * info_gate_std."""
+        gate = self.config.info_gate_std
+        if belief_std is None or gate <= 0.0:
+            return self.config.w_info
+        return self.config.w_info * float(np.clip((belief_std - gate) / gate, 0.0, 1.0))
+
     def belief_reward(
         self,
         states: np.ndarray,
@@ -166,6 +176,7 @@ class UncertainCylinderPush(CylinderPush):
         num_particles: int,
         particle_weights: np.ndarray,
         system_metadata: dict[str, Any] | None = None,
+        belief_std: float | None = None,
     ) -> np.ndarray:
         """Belief-aware reward: -(E_task + lambda * E_info) per action sequence.
 
@@ -176,6 +187,7 @@ class UncertainCylinderPush(CylinderPush):
             num_particles: M, number of belief particles per action sequence.
             particle_weights: Weights of the M plan particles, shape (M,).
             system_metadata: Passed through to the task reward.
+            belief_std: Spread sqrt(tr(cov)) of the full belief, used to gate the information term.
 
         Returns:
             Rewards, shape (K,).
@@ -185,7 +197,8 @@ class UncertainCylinderPush(CylinderPush):
         task_reward = self.reward(states, sensors, controls, system_metadata).reshape(num_rollouts, num_particles)
         task_reward = task_reward @ particle_weights
 
-        if self.config.w_info <= 0.0 or num_particles < 2:
+        w_info = self.info_weight(belief_std)
+        if w_info <= 0.0 or num_particles < 2:
             return task_reward
 
         sub = slice(None, None, max(1, self.config.info_subsample))
@@ -193,4 +206,4 @@ class UncertainCylinderPush(CylinderPush):
         info_gain = expected_info_gain(
             traj[..., PUSHER_QPOS_IDX], traj[..., CART_QPOS_IDX], particle_weights, self.contact_params
         )
-        return task_reward + self.config.w_info * info_gain
+        return task_reward + w_info * info_gain
