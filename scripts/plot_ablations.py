@@ -15,6 +15,7 @@ Writes, into the run folder:
     figures/main_effects.png        success rate per value of each parameter
     figures/seed_outcomes.png       success / fail / never-touched for every (config, seed)
     figures/secondary_metrics.png   first-contact time, final belief error, planning time
+    figures/baselines*.png          stage 3 only: success per baseline, overall and split by prior error
 
 Error bars on success rates are 95% Wilson intervals: with n=20 the usual p +- 1.96*SE leaves [0, 1] near p=1 and
 collapses to zero width at p=1, while Wilson stays inside [0, 1]. Continuous metrics use mean +- standard error.
@@ -111,12 +112,14 @@ def load_run(run_dir: Path) -> tuple[list[dict], list[str], dict]:
                 "name": name,
                 "label": "baseline" if name == "baseline" else name.replace(",", ", "),
                 "overrides": overrides,
-                "values": {k: overrides.get(k, baseline[k]) for k in params},
+                "values": {k: overrides.get(k, baseline.get(k)) for k in params},
+                "order": len(configs),  # position in run_config["ablations"] (the ladder order for stage 3)
                 "seed": np.array([int(r["seed"]) for r in eps]),
                 "success": np.array([r["success"] == "True" for r in eps]),
                 **{
                     m: np.array([float(r[m]) for r in eps])
-                    for m in ("first_contact_time", "final_belief_err", "mean_plan_ms")
+                    for m in ("first_contact_time", "final_belief_err", "mean_plan_ms", "prior_err")
+                    if m in eps[0]  # prior_err exists from stage 3 on
                 },
             }
         )
@@ -369,6 +372,84 @@ def plot_main_effects(configs: list[dict], params: list[str], baseline: dict, gr
     plt.close(fig)
 
 
+# Stage 3 (baselines): readable names and roles. Labels only; every number still comes from episodes.csv.
+BASELINE_LABELS = {
+    "baseline": "defaults\n(stage 1/2 ref.)",
+    "oracle": "oracle\n(knows cart)",
+    "blind": "blind\n(ignores touch)",
+    "certainty_equivalent": "plan vs\nbelief mean",
+    "posterior_sampling": "plan vs one\nsampled guess",
+    "no_info": "average guesses,\nno info term",
+    "ours": "ours: average\n+ info gain",
+}
+BOUNDS, OURS = {"oracle", "blind"}, {"ours"}
+
+
+def role_colour(name: str) -> str:
+    """Grey for the bounds, orange for the method, blue for the baselines in between."""
+    return MUTED if name in BOUNDS else ORANGE if name in OURS else BLUE
+
+
+def plot_baselines(configs: list[dict], path: Path) -> None:
+    """Success rate per baseline in ladder order (as listed in the run), with Wilson CIs."""
+    cs = sorted(configs, key=lambda c: c["order"])
+    fig, ax = plt.subplots(figsize=(1.25 * len(cs) + 1.5, 4.4))
+    xs = np.arange(len(cs))
+    ax.bar(xs, [c["rate"] for c in cs], 0.7, color=[role_colour(c["name"]) for c in cs], yerr=yerr(cs), error_kw=ERR,
+           **BAR)  # fmt: skip
+    for x, c in zip(xs, cs, strict=True):
+        ax.text(x, c["ci"][1] + 0.02, f"{c['rate']:.0%}", ha="center", fontsize=8, color=INK_2)
+    ax.set_xticks(xs, [BASELINE_LABELS.get(c["name"], c["name"]) for c in cs], fontsize=8)
+    ax.set_ylim(0, 1.1)
+    ax.set_yticks(np.linspace(0, 1, 5))
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.set_ylabel("success rate")
+    ax.grid(axis="x", visible=False)
+    ax.legend(
+        handles=[Patch(color=MUTED, label="bounds"), Patch(color=BLUE, label="baselines"),
+                 Patch(color=ORANGE, label="our method")],
+        loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=8,
+    )  # fmt: skip
+    ax.set_title(f"Success rate per method ({cs[0]['n']} seeds each, 95% Wilson CI)", pad=28)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_baselines_by_prior_error(configs: list[dict], threshold: float, path: Path) -> None:
+    """Success split by how wrong the starting guess was (|prior mean - true cart| vs the prior sigma)."""
+    cs = sorted(configs, key=lambda c: c["order"])
+    hard = cs[0]["prior_err"] > threshold  # prior error depends only on the seed, so the split is the same for all
+    groups = [("easy", ~hard, RAMP[1]), ("hard", hard, RAMP[4])]
+    fig, ax = plt.subplots(figsize=(1.25 * len(cs) + 1.5, 4.4))
+    xs = np.arange(len(cs))
+    width = 0.38
+    for j, (label, mask, colour) in enumerate(groups):
+        n = int(mask.sum())
+        rates, errs = [], []
+        for c in cs:
+            k = int(c["success"][mask].sum())
+            lo, hi = wilson(k, n) if n else (np.nan, np.nan)
+            rates.append(k / n if n else np.nan)
+            errs.append([rates[-1] - lo, hi - rates[-1]])
+        bar_x = xs + (j - 0.5) * width
+        ax.bar(bar_x, rates, width, color=colour, yerr=np.array(errs).T, error_kw=ERR, **BAR,
+               label=f"{label}: prior error {'>' if label == 'hard' else '≤'} {threshold:g} m  (n={n})")  # fmt: skip
+        for x, r in zip(bar_x, rates, strict=True):
+            ax.text(x, 1.03, f"{r:.0%}", ha="center", fontsize=7, color=INK_2)
+    ax.set_xticks(xs, [BASELINE_LABELS.get(c["name"], c["name"]) for c in cs], fontsize=8)
+    ax.set_ylim(0, 1.1)
+    ax.set_yticks(np.linspace(0, 1, 5))
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.set_ylabel("success rate")
+    ax.grid(axis="x", visible=False)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, fontsize=8)
+    ax.set_title("Success by how wrong the starting guess was (95% Wilson CI)", pad=28)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def plot_seed_outcomes(configs: list[dict], path: Path) -> None:
     """Heatmap of the outcome of every (config, seed): shows which seeds fail for every config."""
     seeds = sorted({int(s) for c in configs for s in c["seed"]})
@@ -461,16 +542,23 @@ def main() -> None:
 
     fig_dir = run_dir / "figures"
     fig_dir.mkdir(exist_ok=True)
-    if axes:
-        plot_success_grid(configs, axes, baseline, fig_dir / "success.png")
+    if run_config.get("stage") == 3:  # baselines: ladder-ordered bars instead of parameter plots
+        plot_baselines(configs, fig_dir / "baselines.png")
+        if "prior_err" in configs[0]:
+            plot_baselines_by_prior_error(
+                configs, baseline["task.prior_sigma"], fig_dir / "baselines_by_prior_error.png"
+            )
     else:
-        plot_success_bars(configs, fig_dir / "success.png")
-    plot_main_effects(configs, params, baseline, axes is not None, fig_dir / "main_effects.png")
+        if axes:
+            plot_success_grid(configs, axes, baseline, fig_dir / "success.png")
+        else:
+            plot_success_bars(configs, fig_dir / "success.png")
+        plot_main_effects(configs, params, baseline, axes is not None, fig_dir / "main_effects.png")
     plot_seed_outcomes(configs, fig_dir / "seed_outcomes.png")
     plot_secondary(configs, fig_dir / "secondary_metrics.png")
 
     print(f"\nTable:   {run_dir / 'summary.md'}")
-    print(f"Figures: {fig_dir}/{{success,main_effects,seed_outcomes,secondary_metrics}}.png")
+    print(f"Figures: {fig_dir}/ ({', '.join(sorted(p.name for p in fig_dir.glob('*.png')))})")
 
 
 if __name__ == "__main__":

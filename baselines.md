@@ -29,19 +29,20 @@ about which of its specific ingredients earn their place:
 
 ## Baseline ladder: one ingredient added at a time
 
-| ID | Baseline | Cart knowledge | Code needed |
+| ID | Baseline | Cart knowledge | Implemented in `scripts/baselines/` |
 |---|---|---|---|
-| B0 | Oracle (upper bound) | Plans against the true cart state (`current_state` already contains it) | New planner mode |
-| B1 | Blind (lower bound) | Belief propagated but never updated by touch | New planner mode |
-| B2 | Certainty-equivalent MPPI | Same particle filter; plans against the belief mean only | New planner mode |
-| B3 | Posterior-sampling MPPI | Same filter; one sampled guess per planning step | Exists: `task.num_plan_particles=1` |
-| B4 | Expected-reward MPPI | Same filter; averages over M guesses, no information term | Exists: `task.w_info=0` |
-| B5 | MPPI + generic information term | See the open options below | New |
-| B6 | Full method, tuned | | Exists |
+| B0 | Oracle (upper bound) | Plans against the true cart state (`current_state` already contains it) | `oracle.py` (controller subclass) |
+| B1 | Blind (lower bound) | Belief propagated but never updated by touch | `blind.py` (controller subclass) |
+| B2 | Certainty-equivalent MPPI | Same particle filter; plans against the belief mean only | `certainty_equivalent.py` (controller subclass) |
+| B3 | Posterior-sampling MPPI | Same filter; one sampled guess per planning step | `posterior_sampling.py` (`task.num_plan_particles=1`) |
+| B4 | Expected-reward MPPI | Same filter; averages over M guesses, no information term | `no_info.py` (`task.w_info=0`) |
+| B5 | MPPI + generic information term | See the open options below | Not yet |
+| B6 | Full method, tuned | | `ours.py` |
 
-B0–B2 could be a single task field, e.g. `planner_mode = "belief" | "mean" | "blind" | "oracle"`, read in
-`BeliefAwareController.update_belief` / `_pre_optimization`. The ablation runner can then sweep it like any other
-override.
+Each baseline is one module with its overrides and, where needed, a `BeliefAwareController` subclass passed to
+`make_controller(controller_cls=...)`, so judo itself is unchanged. Run them with
+`python scripts/ablate_uncertain_push.py --stage 3` and plot with `scripts/plot_ablations.py`.
+Single-guess baselines (B0, B2, B3) get 480 MPPI sequences to match the 32 × 15 rollouts of the belief-averaged ones.
 
 ## Open decision 1: which competitor B5 is
 
@@ -51,7 +52,7 @@ override.
 - **Point estimate + exploration bonus.** The same particle filter, but plan only against its mean. Add a generic bonus
   for moving towards high-uncertainty regions, with no contact model in the bonus. Less code; it tests ingredient 3
   but not 2.
-- **Defer.** Run B0–B4 and B6 first, then decide on B5 from those results.
+- **Defer.** Run B0–B4 and B6 first, then decide on B5 from those results. (B0–B4 and B6 now run as stage 3.)
 
 ## Open decision 2: how to keep compute equal
 
@@ -76,6 +77,13 @@ Logs are in `out/ablations/`; this folder is gitignored, so it exists only local
   - Raising `num_particles` to 100 gives 95%.
   - Seed 9 fails in every config. It has the largest prior error (1.25 m), and the pusher stalls in the centre of a
     ring of guesses it has already ruled out.
+- **Stage 3, 30 seeds** (baselines, rollouts matched; run folder `20261125-143306_stage3`):
+  - Ours (tuned) 90%, oracle 100%, blind 0%; certainty equivalent and posterior sampling 77%; no info term 70%;
+    defaults 50%.
+  - Ours never fails a seed that a non-oracle baseline solves. Against no info term it wins 6 seeds and loses none.
+  - The gap is on hard starts (prior error > 0.5 m): ours 79%, the other non-oracle baselines 43–57%.
+  - Caveats: the tuned settings were chosen on seeds 0–19; baselines other than ours were not tuned; at 30 seeds the
+    gap to certainty equivalent and posterior sampling (4 wins, 0 losses each) is not significant on its own.
 
 ## Next step (agreed): soft-min pusher target
 

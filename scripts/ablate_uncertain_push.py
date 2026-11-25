@@ -33,6 +33,7 @@ Caveats:
 
 import argparse
 import csv
+import importlib
 import itertools
 import json
 import multiprocessing
@@ -131,7 +132,29 @@ STAGE_2 = [
     ],
 ]
 
-STAGES = {1: STAGE_1, 2: STAGE_2}
+
+def baseline_ablations() -> list[tuple[str, dict]]:
+    """Stage 3: one ablation per module in scripts/baselines/, in ladder order (see scripts/baselines/__init__.py).
+
+    A baseline with its own controller class carries the key "controller_cls" (the module name, so it can be sent to
+    worker processes); run_episode() passes that class to make_controller.
+    """
+    import baselines  # noqa: PLC0415  (scripts/baselines/, importable because this script lives in scripts/)
+
+    ablations = []
+    for module_name in baselines.ORDER:
+        module = importlib.import_module(f"baselines.{module_name}")
+        overrides = dict(module.OVERRIDES)
+        if module.CONTROLLER_CLS is not None:
+            overrides["controller_cls"] = module.__name__
+        ablations.append((module.NAME, overrides))
+    return ablations
+
+
+# Stage 3: the method against simpler baselines that get the same touch data and the same rollout budget.
+STAGE_3 = baseline_ablations()
+
+STAGES = {1: STAGE_1, 2: STAGE_2, 3: STAGE_3}
 
 
 # ============================================================================================================== #
@@ -153,6 +176,7 @@ class Episode:
     final_belief_err: float
     final_belief_std: float  # sqrt(trace(belief covariance)) at the end
     mean_plan_ms: float  # mean wall time of one update_action call
+    prior_err: float  # |prior mean - true cart position| at t=0: how wrong the starting guess is
     # trajectory, only kept when recording
     qpos: np.ndarray | None = field(default=None, repr=False)  # (T, nq)
     belief_xy: np.ndarray | None = field(default=None, repr=False)  # (T, N, 2), held between plan steps
@@ -169,6 +193,7 @@ class Episode:
         "final_belief_err",
         "final_belief_std",
         "mean_plan_ms",
+        "prior_err",
     )
 
 
@@ -214,9 +239,13 @@ def run_episode(
 
     warnings.filterwarnings("ignore")
 
+    overrides = dict(overrides)
+    controller_module = overrides.pop("controller_cls", None)
+    controller_cls = importlib.import_module(controller_module).CONTROLLER_CLS if controller_module else None
+
     np.random.seed(seed)
     sim = MJSimulation(init_task=TASK)
-    ctrl = make_controller(TASK, OPTIMIZER)
+    ctrl = make_controller(TASK, OPTIMIZER, controller_cls=controller_cls)
     apply_overrides(sim, ctrl, overrides)
 
     # Re-seed and reset so the scene and prior noise depend only on the seed (identical across ablations),
@@ -225,6 +254,7 @@ def run_episode(
     sim.task.reset()
     ctrl.reset()
 
+    prior_err = float(np.linalg.norm(np.asarray(sim.task.prior_mean) - sim.task.data.qpos[2:4]))
     num_steps = int(round(duration / sim.timestep))
     qpos_log, xy_log, w_log = [], [], []
     errors, plan_ms = [], []
@@ -264,6 +294,7 @@ def run_episode(
         final_belief_err=errors[-1],
         final_belief_std=float(np.sqrt(np.trace(ctrl.belief.cov()))),
         mean_plan_ms=float(np.mean(plan_ms)),
+        prior_err=prior_err,
         qpos=np.array(qpos_log) if record else None,
         belief_xy=np.array(xy_log) if record else None,
         belief_w=np.array(w_log) if record else None,
