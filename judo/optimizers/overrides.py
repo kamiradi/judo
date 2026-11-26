@@ -9,7 +9,7 @@ from judo.optimizers.ps import PredictiveSamplingConfig
 
 def set_default_cylinder_push_overrides() -> None:
     """Sets the default task-specific controller config overrides for the cylinder push task."""
-    for task_name in ("cylinder_push", "uncertain_cylinder_push"):
+    for task_name in ("cylinder_push", "uncertain_cylinder_push", "uncertain_com_cylinder_push"):
         set_config_overrides(
             task_name,
             PredictiveSamplingConfig,

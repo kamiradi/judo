@@ -32,6 +32,7 @@ from judo.tasks.spot import (
     SpotTireUprightConfig,
 )
 from judo.tasks.spot.spot_constants import SPOT_LOCOMOTION_POLICY_PATH
+from judo.tasks.uncertain_com_cylinder_push import UncertainComCylinderPush, UncertainComCylinderPushConfig
 from judo.tasks.uncertain_cylinder_push import UncertainCylinderPush, UncertainCylinderPushConfig
 
 
@@ -54,6 +55,11 @@ _registered_tasks: Dict[str, TaskRegistration] = {
         UncertainCylinderPush,
         UncertainCylinderPushConfig,
         controller_cls="judo.controller.belief_controller.BeliefAwareController",
+    ),
+    UncertainComCylinderPush.name: TaskRegistration(
+        UncertainComCylinderPush,
+        UncertainComCylinderPushConfig,
+        controller_cls="judo.controller.param_belief_controller.ParamBeliefController",
     ),
     Cartpole.name: TaskRegistration(Cartpole, CartpoleConfig),
     FR3Pick.name: TaskRegistration(FR3Pick, FR3PickConfig),
@@ -174,6 +180,8 @@ __all__ = [
     "SpotTireRollConfig",
     "SpotTireUpright",
     "SpotTireUprightConfig",
+    "UncertainComCylinderPush",
+    "UncertainComCylinderPushConfig",
     "UncertainCylinderPush",
     "UncertainCylinderPushConfig",
 ]

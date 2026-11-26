@@ -14,8 +14,13 @@ Writes, into the run folder:
     figures/success.png             success rate per config with 95% CIs (grouped bars for a grid, sorted bars otherwise)
     figures/main_effects.png        success rate per value of each parameter
     figures/seed_outcomes.png       success / fail / never-touched for every (config, seed)
-    figures/secondary_metrics.png   first-contact time, final belief error, planning time
+    figures/secondary_metrics.png   first-contact time, final belief error, planning time (+ identify time and final
+                                    angle error for the CoM task)
     figures/baselines*.png          stage 3 only: success per baseline, overall and split by prior error
+    figures/belief_error.png        stage 3 only: belief error over time per baseline (from belief_error.json)
+
+Works for both tasks of the runner (run_config["task_key"]: "position" or "com"). Every config is paired against
+"baseline", or against "ours" in a run without one (CoM stage 3).
 
 Error bars on success rates are 95% Wilson intervals: with n=20 the usual p +- 1.96*SE leaves [0, 1] near p=1 and
 collapses to zero width at p=1, while Wilson stays inside [0, 1]. Continuous metrics use mean +- standard error.
@@ -88,6 +93,27 @@ def fmt(value: float) -> str:
     return f"{value:g}"
 
 
+CONTINUOUS_METRICS = (
+    "first_contact_time",
+    "final_belief_err",
+    "mean_plan_ms",
+    "identify_time",
+    "final_pos_err",
+    "final_yaw_err",
+)
+
+
+def task_key(run_config: dict) -> str:
+    """'position' or 'com' (runs from before the CoM task have no task_key and are position runs)."""
+    return run_config.get("task_key", "position")
+
+
+def reference_name(configs: list[dict]) -> str:
+    """The config every other one is paired against: "baseline", or "ours" in a run without one, else the first."""
+    names = [c["name"] for c in configs]
+    return next((n for n in ("baseline", "ours") if n in names), names[0])
+
+
 def load_run(run_dir: Path) -> tuple[list[dict], list[str], dict]:
     """Return (configs, swept parameter keys, run_config).
 
@@ -118,8 +144,8 @@ def load_run(run_dir: Path) -> tuple[list[dict], list[str], dict]:
                 "success": np.array([r["success"] == "True" for r in eps]),
                 **{
                     m: np.array([float(r[m]) for r in eps])
-                    for m in ("first_contact_time", "final_belief_err", "mean_plan_ms", "prior_err")
-                    if m in eps[0]  # prior_err exists from stage 3 on
+                    for m in (*CONTINUOUS_METRICS, "prior_err")
+                    if m in eps[0]  # newer metrics are missing from older runs
                 },
             }
         )
@@ -144,7 +170,8 @@ def mean_se(x: np.ndarray) -> tuple[float, float]:
 
 def summarize(configs: list[dict]) -> list[dict]:
     """Add summary statistics to each config and return them sorted best first."""
-    base = next(c for c in configs if c["name"] == "baseline")
+    ref = reference_name(configs)
+    base = next(c for c in configs if c["name"] == ref)
     base_success = dict(zip(base["seed"], base["success"], strict=True))
     for c in configs:
         k, n = int(c["success"].sum()), len(c["success"])
@@ -156,6 +183,7 @@ def summarize(configs: list[dict]) -> list[dict]:
         c["losses"] = sum(b and not ok for (_, b), ok in zip(paired, c["success"], strict=True))
         c["never_touched"] = int(np.isnan(c["first_contact_time"]).sum())
         c["n"] = n
+        c["is_ref"] = c["name"] == ref
     return sorted(configs, key=lambda c: (-c["rate"], -(c["wins"] - c["losses"])))
 
 
@@ -196,8 +224,8 @@ def table_rows(configs: list[dict], params: list[str], baseline: dict, grid: boo
         cells += [
             (f"{c['rate']:.0%}", False),
             (f"{100 * lo:.0f}–{100 * hi:.0f}%", False),
-            ("—" if c["name"] == "baseline" else f"{100 * c['delta']:+.0f}", False),
-            ("—" if c["name"] == "baseline" else f"{c['wins']}/{c['losses']}", False),
+            ("—" if c["is_ref"] else f"{100 * c['delta']:+.0f}", False),
+            ("—" if c["is_ref"] else f"{c['wins']}/{c['losses']}", False),
             (f"{c['never_touched']}/{c['n']}", False),
             (f"{contact:.2f}", False),
             (f"{belief:.3f}", False),
@@ -215,25 +243,28 @@ def print_table(configs: list[dict], header: list[str], rows: list[list], title:
         table.add_column(h, justify="left" if h == "config" else "right", min_width=widest, overflow="fold")
     for c, cells in zip(configs, rows, strict=True):
         texts = [f"[dim]{t}[/dim]" if is_default else t for t, is_default in cells]
-        table.add_row(*texts, style="bold yellow" if c["name"] == "baseline" else None)
+        table.add_row(*texts, style="bold yellow" if c["is_ref"] else None)
     Console().print(table)
 
 
-def write_markdown(path: Path, configs: list[dict], header: list[str], rows: list[list], title: str) -> None:
-    """Write the same table as GitHub markdown; the baseline row is bold."""
+def write_markdown(
+    path: Path, configs: list[dict], header: list[str], rows: list[list], title: str, belief_what: str
+) -> None:
+    """Write the same table as GitHub markdown; the reference row (baseline, or ours) is bold."""
+    ref = next(c["name"] for c in configs if c["is_ref"])
     lines = [f"# {title}", "", "| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for c, cells in zip(configs, rows, strict=True):
         texts = [t for t, _ in cells]
-        if c["name"] == "baseline":
+        if c["is_ref"]:
             texts = [f"**{t}**" for t in texts]
         lines.append("| " + " | ".join(texts) + " |")
     lines += [
         "",
-        "- **95% CI**: Wilson interval of the success rate. **Δ pts**: difference to baseline in percentage points.",
-        "- **W/L**: seeds this config solved and baseline did not / baseline solved and this config did not.",
+        f"- **95% CI**: Wilson interval of the success rate. **Δ pts**: difference to {ref} in percentage points.",
+        f"- **W/L**: seeds this config solved and {ref} did not / {ref} solved and this config did not.",
         "- **no touch**: episodes in which the pusher never touched the cart.",
         "- **contact s**: mean time of first contact, over episodes that touched. **belief m**: mean final distance",
-        "  between belief mean and true cart. Standard errors for both are in figures/secondary_metrics.png.",
+        f"  between belief mean and {belief_what}. Standard errors for both are in figures/secondary_metrics.png.",
         f"- **plan ms**: mean planning time per step (the live app has {LIVE_PLAN_BUDGET_MS:.0f} ms).",
     ]
     path.write_text("\n".join(lines) + "\n")
@@ -374,14 +405,27 @@ def plot_main_effects(configs: list[dict], params: list[str], baseline: dict, gr
 
 # Stage 3 (baselines): readable names and roles. Labels only; every number still comes from episodes.csv.
 BASELINE_LABELS = {
-    "baseline": "defaults\n(stage 1/2 ref.)",
-    "oracle": "oracle\n(knows cart)",
-    "blind": "blind\n(ignores touch)",
-    "certainty_equivalent": "plan vs\nbelief mean",
-    "posterior_sampling": "plan vs one\nsampled guess",
-    "no_info": "average guesses,\nno info term",
-    "ours": "ours: average\n+ info gain",
+    "position": {
+        "baseline": "defaults\n(stage 1/2 ref.)",
+        "oracle": "oracle\n(knows cart)",
+        "blind": "blind\n(ignores touch)",
+        "certainty_equivalent": "plan vs\nbelief mean",
+        "posterior_sampling": "plan vs one\nsampled guess",
+        "no_info": "average guesses,\nno info term",
+        "ours": "ours: average\n+ info gain",
+    },
+    "com": {
+        "oracle": "oracle\n(knows CoM)",
+        "blind": "blind\n(ignores motion)",
+        "certainty_equivalent": "plan with\nmean CoM",
+        "posterior_sampling": "plan with one\nsampled CoM",
+        "no_info": "average CoMs,\nno info term",
+        "ours": "ours: average\n+ info gain",
+    },
 }
+# What the belief tracks, and what "prior error" means, per task (for axis labels and legends).
+BELIEF_WHAT = {"position": "true cart position", "com": "true CoM"}
+PRIOR_ERROR_WHAT = {"position": "prior error", "com": "CoM offset from centre"}
 BOUNDS, OURS = {"oracle", "blind"}, {"ours"}
 
 
@@ -390,7 +434,7 @@ def role_colour(name: str) -> str:
     return MUTED if name in BOUNDS else ORANGE if name in OURS else BLUE
 
 
-def plot_baselines(configs: list[dict], path: Path) -> None:
+def plot_baselines(configs: list[dict], labels: dict[str, str], path: Path) -> None:
     """Success rate per baseline in ladder order (as listed in the run), with Wilson CIs."""
     cs = sorted(configs, key=lambda c: c["order"])
     fig, ax = plt.subplots(figsize=(1.25 * len(cs) + 1.5, 4.4))
@@ -399,7 +443,7 @@ def plot_baselines(configs: list[dict], path: Path) -> None:
            **BAR)  # fmt: skip
     for x, c in zip(xs, cs, strict=True):
         ax.text(x, c["ci"][1] + 0.02, f"{c['rate']:.0%}", ha="center", fontsize=8, color=INK_2)
-    ax.set_xticks(xs, [BASELINE_LABELS.get(c["name"], c["name"]) for c in cs], fontsize=8)
+    ax.set_xticks(xs, [labels.get(c["name"], c["name"]) for c in cs], fontsize=8)
     ax.set_ylim(0, 1.1)
     ax.set_yticks(np.linspace(0, 1, 5))
     ax.yaxis.set_major_formatter(PercentFormatter(1.0))
@@ -416,8 +460,10 @@ def plot_baselines(configs: list[dict], path: Path) -> None:
     plt.close(fig)
 
 
-def plot_baselines_by_prior_error(configs: list[dict], threshold: float, path: Path) -> None:
-    """Success split by how wrong the starting guess was (|prior mean - true cart| vs the prior sigma)."""
+def plot_baselines_by_prior_error(
+    configs: list[dict], threshold: float, labels: dict[str, str], what: str, path: Path
+) -> None:
+    """Success split by how wrong the starting guess was (|prior centre - truth| vs the run's hard_threshold)."""
     cs = sorted(configs, key=lambda c: c["order"])
     hard = cs[0]["prior_err"] > threshold  # prior error depends only on the seed, so the split is the same for all
     groups = [("easy", ~hard, RAMP[1]), ("hard", hard, RAMP[4])]
@@ -434,10 +480,10 @@ def plot_baselines_by_prior_error(configs: list[dict], threshold: float, path: P
             errs.append([rates[-1] - lo, hi - rates[-1]])
         bar_x = xs + (j - 0.5) * width
         ax.bar(bar_x, rates, width, color=colour, yerr=np.array(errs).T, error_kw=ERR, **BAR,
-               label=f"{label}: prior error {'>' if label == 'hard' else '≤'} {threshold:g} m  (n={n})")  # fmt: skip
+               label=f"{label}: {what} {'>' if label == 'hard' else '≤'} {threshold:.3g} m  (n={n})")  # fmt: skip
         for x, r in zip(bar_x, rates, strict=True):
             ax.text(x, 1.03, f"{r:.0%}", ha="center", fontsize=7, color=INK_2)
-    ax.set_xticks(xs, [BASELINE_LABELS.get(c["name"], c["name"]) for c in cs], fontsize=8)
+    ax.set_xticks(xs, [labels.get(c["name"], c["name"]) for c in cs], fontsize=8)
     ax.set_ylim(0, 1.1)
     ax.set_yticks(np.linspace(0, 1, 5))
     ax.yaxis.set_major_formatter(PercentFormatter(1.0))
@@ -488,16 +534,20 @@ def plot_seed_outcomes(configs: list[dict], path: Path) -> None:
     plt.close(fig)
 
 
-def plot_secondary(configs: list[dict], path: Path) -> None:
-    """First-contact time, final belief error and planning time per config (mean +- SE over seeds)."""
+def plot_secondary(configs: list[dict], task: str, path: Path) -> None:
+    """First-contact time, final belief error, planning time (+ CoM-task metrics) per config (mean +- SE over seeds)."""
     cs = configs[::-1]
     metrics = [
         ("first_contact_time", "first contact (s)\nepisodes that touched"),
-        ("final_belief_err", "final belief error (m)"),
+        ("final_belief_err", "final CoM error (m)" if task == "com" else "final belief error (m)"),
+        ("identify_time", "time to identify (s)\nbelief std < info gate"),
+        ("final_yaw_err", "final angle error (rad)"),
         ("mean_plan_ms", "planning time per step (ms)"),
     ]
-    fig, axs = plt.subplots(1, 3, figsize=(12, 0.28 * len(cs) + 1.4), sharey=True)
-    colours = [MUTED if c["name"] == "baseline" else BLUE for c in cs]
+    # keep a metric only if this run logged it and it is not NaN everywhere (e.g. no angle goal in the position task)
+    metrics = [(m, t) for m, t in metrics if m in cs[0] and any(np.any(~np.isnan(c[m])) for c in cs)]
+    fig, axs = plt.subplots(1, len(metrics), figsize=(4 * len(metrics), 0.28 * len(cs) + 1.4), sharey=True)
+    colours = [MUTED if c["is_ref"] else BLUE for c in cs]
     for ax, (key, title) in zip(axs, metrics, strict=True):
         stats = [mean_se(c[key]) for c in cs]
         ax.barh(np.arange(len(cs)), [m for m, _ in stats], 0.75, color=colours, xerr=[se for _, se in stats],
@@ -508,10 +558,46 @@ def plot_secondary(configs: list[dict], path: Path) -> None:
             ax.axvline(LIVE_PLAN_BUDGET_MS, color=INK_2, linestyle="--", linewidth=1.0)
             ax.text(LIVE_PLAN_BUDGET_MS, len(cs) - 0.3, " live budget", fontsize=7, color=INK_2, va="bottom")
     axs[0].set_yticks(np.arange(len(cs)), [c["label"] for c in cs], fontsize=7)
-    fig.suptitle("Secondary metrics (mean ± SE over seeds; grey = baseline)", color=INK, fontsize=10)
+    ref = next(c["name"] for c in cs if c["is_ref"])
+    fig.suptitle(f"Secondary metrics (mean ± SE over seeds; grey = {ref})", color=INK, fontsize=10)
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_belief_error(run_dir: Path, configs: list[dict], labels: dict[str, str], key: str, path: Path) -> bool:
+    """Belief error over time per baseline (mean +- SE over seeds), from belief_error.json. False if not logged."""
+    source = run_dir / "belief_error.json"
+    if not source.exists():
+        return False
+    data = json.loads(source.read_text())
+    cs = sorted(configs, key=lambda c: c["order"])
+    fig, ax = plt.subplots(figsize=(7.5, 4.2))
+    # bounds dotted/dashed grey, ours solid orange; the baselines in between get distinct blues and dash patterns
+    middle = [c["name"] for c in cs if c["name"] not in BOUNDS | OURS]
+    styles = {"oracle": ":", "blind": "--", **dict(zip(middle, ["-.", (0, (6, 2)), "-", (0, (2, 1))], strict=False))}
+    shades = dict(zip(middle, ramp(len(middle)), strict=True))
+    for c in cs:
+        traces = data["traces"].get(c["name"], {})
+        if not traces:
+            continue
+        length = min(len(t) for t in traces.values())
+        errs = np.array([t[:length] for t in traces.values()])
+        t = data["plan_dt"] * np.arange(length)
+        mean, se = errs.mean(0), errs.std(0, ddof=1) / np.sqrt(len(errs)) if len(errs) > 1 else np.zeros(length)
+        colour = shades.get(c["name"], role_colour(c["name"]))
+        ax.plot(t, mean, color=colour, linestyle=styles.get(c["name"], "-"), linewidth=1.6,
+                label=labels.get(c["name"], c["name"]).replace("\n", " "))  # fmt: skip
+        ax.fill_between(t, mean - se, mean + se, color=colour, alpha=0.15, linewidth=0)
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("|belief mean − " + BELIEF_WHAT[key] + "| (m)")
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=7, ncol=2)
+    ax.set_title(f"Belief error over time (mean ± SE over {cs[0]['n']} seeds)")
+    fig.tight_layout()
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return True
 
 
 # ============================================================================================================== #
@@ -536,18 +622,22 @@ def main() -> None:
         f"(commit {git.get('commit', '?')[:7]}{', dirty' if git.get('dirty') else ''})"
     )
 
+    key = task_key(run_config)
+    labels = BASELINE_LABELS[key]
     header, rows = table_rows(configs, params, baseline, grid=axes is not None)
     print_table(configs, header, rows, title)
-    write_markdown(run_dir / "summary.md", configs, header, rows, title)
+    write_markdown(run_dir / "summary.md", configs, header, rows, title, BELIEF_WHAT[key])
 
     fig_dir = run_dir / "figures"
     fig_dir.mkdir(exist_ok=True)
     if run_config.get("stage") == 3:  # baselines: ladder-ordered bars instead of parameter plots
-        plot_baselines(configs, fig_dir / "baselines.png")
+        plot_baselines(configs, labels, fig_dir / "baselines.png")
         if "prior_err" in configs[0]:
+            threshold = run_config.get("hard_threshold", baseline.get("task.prior_sigma"))
             plot_baselines_by_prior_error(
-                configs, baseline["task.prior_sigma"], fig_dir / "baselines_by_prior_error.png"
+                configs, threshold, labels, PRIOR_ERROR_WHAT[key], fig_dir / "baselines_by_prior_error.png"
             )
+        plot_belief_error(run_dir, configs, labels, key, fig_dir / "belief_error.png")
     else:
         if axes:
             plot_success_grid(configs, axes, baseline, fig_dir / "success.png")
@@ -555,7 +645,7 @@ def main() -> None:
             plot_success_bars(configs, fig_dir / "success.png")
         plot_main_effects(configs, params, baseline, axes is not None, fig_dir / "main_effects.png")
     plot_seed_outcomes(configs, fig_dir / "seed_outcomes.png")
-    plot_secondary(configs, fig_dir / "secondary_metrics.png")
+    plot_secondary(configs, key, fig_dir / "secondary_metrics.png")
 
     print(f"\nTable:   {run_dir / 'summary.md'}")
     print(f"Figures: {fig_dir}/ ({', '.join(sorted(p.name for p in fig_dir.glob('*.png')))})")
