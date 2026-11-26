@@ -23,9 +23,13 @@ Usage (from the repo root, inside the pixi shell):
 
 Output, in out/ablations/<timestamp>_<task>_stage<N>/:
     run_config.json          baseline, ablations, seeds, duration, git commit
-    episodes.csv             one row per (ablation, seed): overrides + metrics (the raw data)
+    episodes.csv             one row per (ablation, seed): overrides + metrics (the raw data). Appended as each
+                             episode finishes and re-sorted at the end, so a crashed or interrupted run keeps
+                             everything finished so far (the plots only need this file and run_config.json)
+    belief_error.json        belief error per plan step of every episode (belief_error.jsonl while running)
     summary.csv              one row per ablation: success rate +- std error, delta and paired wins/losses vs baseline
-    trajectories/<name>.h5   every episode of that ablation, for replay with scripts/replay_uncertain_push.py
+    trajectories/<name>.h5   every episode of that ablation, for replay with scripts/replay_uncertain_push.py;
+                             written as soon as all its seeds are done
 
 Seeds are paired: seed s gives the same initial pusher/cart positions and the same prior noise (position task) or
 true centre of mass (CoM task) in every ablation, so "w_info=10 won on seed 3 where baseline failed" is a
@@ -41,6 +45,8 @@ Caveats:
 
 import argparse
 import csv
+import ctypes
+import gc
 import importlib
 import itertools
 import json
@@ -433,7 +439,7 @@ def run_episode(
             success_time = sim.task.data.time
 
     yaw_error = getattr(sim.task, "yaw_error", None)
-    return Episode(
+    episode = Episode(
         ablation=ablation,
         seed=seed,
         success=not np.isnan(success_time),
@@ -456,6 +462,23 @@ def run_episode(
         reference_xy=np.array(ref_log) if record else None,
         goal_pos=np.asarray(sim.task.config.goal_pos[:2], dtype=float),
     )
+    del sim, ctrl, yaw_error
+    release_freed_memory()
+    return episode
+
+
+def release_freed_memory() -> None:
+    """Hand memory freed by the finished episode back to the OS.
+
+    Workers are reused across episodes. Each episode frees its MuJoCo models/datas, but glibc keeps the freed heap
+    pages, so a worker's resident memory grew by ~150-300 MB per CoM episode until the stage 2 run was OOM-killed.
+    malloc_trim returns those pages (measured: flat at ~230 MB per worker). No-op where glibc is absent.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 # ============================================================================================================== #
@@ -463,18 +486,27 @@ def run_episode(
 # ============================================================================================================== #
 
 
-def write_episodes_csv(path: Path, episodes: list[Episode], ablations: dict[str, dict]) -> None:
-    """One row per (ablation, seed) with the overrides spelled out and all metrics."""
+def episodes_csv_header(ablations: dict[str, dict]) -> list[str]:
+    """Columns of episodes.csv: ablation, seed, every override key used in the run, then the metrics."""
+    return ["ablation", "seed", *sorted({k for o in ablations.values() for k in o}), *Episode.METRICS]
+
+
+def episodes_csv_row(ep: Episode, ablations: dict[str, dict]) -> list:
+    """One episodes.csv row, matching episodes_csv_header."""
     override_keys = sorted({k for o in ablations.values() for k in o})
+    overrides = ablations[ep.ablation]
+    return [ep.ablation, ep.seed, *[overrides.get(k, "") for k in override_keys]] + [
+        getattr(ep, m) for m in Episode.METRICS
+    ]
+
+
+def write_episodes_csv(path: Path, episodes: list[Episode], ablations: dict[str, dict]) -> None:
+    """One row per (ablation, seed) with the overrides spelled out and all metrics, sorted."""
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["ablation", "seed", *override_keys, *Episode.METRICS])
+        writer.writerow(episodes_csv_header(ablations))
         for ep in sorted(episodes, key=lambda e: (e.ablation, e.seed)):
-            overrides = ablations[ep.ablation]
-            writer.writerow(
-                [ep.ablation, ep.seed, *[overrides.get(k, "") for k in override_keys]]
-                + [getattr(ep, m) for m in Episode.METRICS]
-            )
+            writer.writerow(episodes_csv_row(ep, ablations))
 
 
 def reference_name(ablation_names: list[str]) -> str | None:
@@ -520,6 +552,11 @@ def summarize(episodes: list[Episode], ablation_names: list[str]) -> list[dict]:
             }
         )
     return rows
+
+
+def belief_trace_record(ep: Episode) -> dict:
+    """One line of belief_error.jsonl, written as the episode finishes."""
+    return {"ablation": ep.ablation, "seed": ep.seed, "trace": [round(e, 5) for e in ep.belief_err_trace]}
 
 
 def write_belief_error(path: Path, episodes: list[Episode], plan_dt: float) -> None:
@@ -615,6 +652,16 @@ def write_trajectories(path: Path, task: str, episodes: list[Episode], overrides
         f.create_dataset("seed", data=np.array([e.seed for e in episodes]))
 
 
+def save_and_drop_trajectories(
+    out_dir: Path, task: str, name: str, episodes: list[Episode], ablations: dict[str, dict]
+) -> None:
+    """Write the .h5 of an ablation whose seeds are all done, then free its trajectory arrays in this process."""
+    mine = [e for e in episodes if e.ablation == name]
+    write_trajectories(out_dir / "trajectories" / f"{name}.h5", task, mine, ablations[name])
+    for e in mine:
+        e.qpos = e.belief_xy = e.belief_w = e.reference_xy = None
+
+
 def git_info() -> dict:
     """Commit hash and whether the working tree has uncommitted changes, for reproducibility."""
 
@@ -678,6 +725,7 @@ def main() -> None:
                 "seeds": seeds,
                 "duration": args.duration,
                 "steps_per_plan": args.steps_per_plan,
+                "plan_dt": args.steps_per_plan * SIM_DT,
                 "baseline": setup.baseline,
                 "ablations": ablations,
                 "git": git_info(),
@@ -689,39 +737,59 @@ def main() -> None:
 
     jobs = [(name, overrides, seed) for name, overrides in ablations.items() for seed in seeds]
     episodes: list[Episode] = []
+    seeds_left = {name: len(seeds) for name in ablations}
+    plan_dt = args.steps_per_plan * SIM_DT
     start = time.time()
     ctx = multiprocessing.get_context("spawn")  # fresh interpreter per worker: no state shared between episodes
-    with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as pool:
-        futures = {
-            pool.submit(run_episode, args.task, name, overrides, seed, args.duration, args.steps_per_plan, record): (
-                name,
-                seed,
-            )
-            for name, overrides, seed in jobs
-        }
-        for i, future in enumerate(as_completed(futures), start=1):
-            ep = future.result()
-            episodes.append(ep)
-            print(
-                f"[{i:4d}/{len(jobs)} {time.time() - start:6.0f}s] {ep.ablation:40s} seed={ep.seed:<3d} "
-                f"{'SUCCESS' if ep.success else 'fail   '} t_contact={ep.first_contact_time:5.2f} "
-                f"belief_err={ep.final_belief_err:.3f}",
-                flush=True,
-            )
+    # Results are saved as they arrive, so a crash, OOM kill or Ctrl-C keeps every finished episode.
+    with (
+        open(out_dir / "episodes.csv", "w", newline="") as csv_file,
+        open(out_dir / "belief_error.jsonl", "w") as traces_file,
+    ):
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(episodes_csv_header(ablations))
+        csv_file.flush()
+        try:
+            with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as pool:
+                futures = {
+                    pool.submit(
+                        run_episode, args.task, name, overrides, seed, args.duration, args.steps_per_plan, record
+                    ): (name, seed)
+                    for name, overrides, seed in jobs
+                }
+                try:
+                    for i, future in enumerate(as_completed(futures), start=1):
+                        ep = future.result()
+                        episodes.append(ep)
+                        csv_writer.writerow(episodes_csv_row(ep, ablations))
+                        csv_file.flush()
+                        traces_file.write(json.dumps(belief_trace_record(ep)) + "\n")
+                        traces_file.flush()
+                        seeds_left[ep.ablation] -= 1
+                        if record and seeds_left[ep.ablation] == 0:
+                            save_and_drop_trajectories(out_dir, setup.task, ep.ablation, episodes, ablations)
+                        print(
+                            f"[{i:4d}/{len(jobs)} {time.time() - start:6.0f}s] {ep.ablation:40s} seed={ep.seed:<3d} "
+                            f"{'SUCCESS' if ep.success else 'fail   '} t_contact={ep.first_contact_time:5.2f} "
+                            f"belief_err={ep.final_belief_err:.3f}",
+                            flush=True,
+                        )
+                except BaseException:
+                    pool.shutdown(wait=False, cancel_futures=True)  # don't run the queued jobs before exiting
+                    raise
+        finally:
+            if len(episodes) < len(jobs):
+                print(f"\nINCOMPLETE: {len(episodes)}/{len(jobs)} episodes finished; writing what is done.")
+            # Final, sorted versions of the incremental files (also on failure, from the finished episodes).
+            write_episodes_csv(out_dir / "episodes.csv", episodes, ablations)
+            write_belief_error(out_dir / "belief_error.json", episodes, plan_dt)
+            (out_dir / "belief_error.jsonl").unlink(missing_ok=True)
+            write_summary_csv(out_dir / "summary.csv", summarize(episodes, list(ablations)))
+            if record:  # ablations cut short: save the seeds they finished
+                for name in {e.ablation for e in episodes if e.qpos is not None}:
+                    save_and_drop_trajectories(out_dir, setup.task, name, episodes, ablations)
 
-    write_episodes_csv(out_dir / "episodes.csv", episodes, ablations)
-    write_belief_error(out_dir / "belief_error.json", episodes, args.steps_per_plan * SIM_DT)
     rows = summarize(episodes, list(ablations))
-    write_summary_csv(out_dir / "summary.csv", rows)
-    if record:
-        for name, overrides in ablations.items():
-            write_trajectories(
-                out_dir / "trajectories" / f"{name}.h5",
-                setup.task,
-                [e for e in episodes if e.ablation == name],
-                overrides,
-            )
-
     print_summary(rows)
     if args.stage == 1:
         print_top_movers(rows, ablations)

@@ -188,9 +188,18 @@ def summarize(configs: list[dict]) -> list[dict]:
 
 
 def is_factorial(configs: list[dict], params: list[str]) -> bool:
-    """True for a grid run: every config except the baseline overrides every swept parameter (any number of them)."""
+    """True for a grid run: every config except the baseline overrides every swept parameter (any number of them).
+
+    Needs 2+ cells over "scope.field" config keys, so a stage 3 run cut short after one baseline (whose overrides
+    include controller_cls) isn't mistaken for a one-cell grid.
+    """
     cells = [c for c in configs if c["name"] != "baseline"]
-    return len(params) > 1 and bool(cells) and all(set(c["overrides"]) == set(params) for c in cells)
+    return (
+        len(params) > 1
+        and len(cells) > 1
+        and all("." in k for k in params)
+        and all(set(c["overrides"]) == set(params) for c in cells)
+    )
 
 
 def grid_axes(configs: list[dict], params: list[str]) -> dict[str, list] | None:
@@ -576,10 +585,18 @@ def plot_secondary(configs: list[dict], task: str, path: Path) -> None:
 
 def plot_belief_error(run_dir: Path, configs: list[dict], labels: dict[str, str], key: str, path: Path) -> bool:
     """Belief error over time per baseline (mean +- SE over seeds), from belief_error.json. False if not logged."""
-    source = run_dir / "belief_error.json"
-    if not source.exists():
+    source, partial = run_dir / "belief_error.json", run_dir / "belief_error.jsonl"
+    if source.exists():
+        data = json.loads(source.read_text())
+    elif partial.exists():  # a run that was killed before its final write: one JSON record per finished episode
+        run_config = json.loads((run_dir / "run_config.json").read_text())
+        data = {"plan_dt": run_config["plan_dt"], "traces": {}}
+        for line in partial.read_text().splitlines():
+            if line.strip():
+                rec = json.loads(line)
+                data["traces"].setdefault(rec["ablation"], {})[str(rec["seed"])] = rec["trace"]
+    else:
         return False
-    data = json.loads(source.read_text())
     cs = sorted(configs, key=lambda c: c["order"])
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
     # bounds dotted/dashed grey, ours solid orange; the baselines in between get distinct blues and dash patterns
