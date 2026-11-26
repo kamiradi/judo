@@ -187,6 +187,12 @@ def summarize(configs: list[dict]) -> list[dict]:
     return sorted(configs, key=lambda c: (-c["rate"], -(c["wins"] - c["losses"])))
 
 
+def is_factorial(configs: list[dict], params: list[str]) -> bool:
+    """True for a grid run: every config except the baseline overrides every swept parameter (any number of them)."""
+    cells = [c for c in configs if c["name"] != "baseline"]
+    return len(params) > 1 and bool(cells) and all(set(c["overrides"]) == set(params) for c in cells)
+
+
 def grid_axes(configs: list[dict], params: list[str]) -> dict[str, list] | None:
     """If the configs form a full grid over 2-3 parameters, return {key: sorted values}; otherwise None."""
     if not 2 <= len(params) <= 3:
@@ -360,15 +366,18 @@ def plot_success_bars(configs: list[dict], path: Path) -> None:
 def plot_main_effects(configs: list[dict], params: list[str], baseline: dict, grid: bool, path: Path) -> None:
     """Success rate per value of each parameter.
 
-    Grid: pooled over every config with that value (all other parameters vary). Sweep: the configs that change only
-    this parameter, plus the baseline for its default value.
+    Grid: pooled over every grid cell with that value (all other parameters vary); the baseline is pooled too only when
+    it is itself a grid cell. Sweep: the configs that change only this parameter, plus the baseline for its default.
     """
     ncols = min(len(params), 5)
     nrows = int(np.ceil(len(params) / ncols))
     fig, axs = plt.subplots(nrows, ncols, figsize=(2.6 * ncols, 2.8 * nrows), sharey=True, squeeze=False)
     for ax, key in zip(axs.flat, params, strict=False):
         if grid:
-            pool = list(configs)
+            pool = [c for c in configs if set(c["overrides"]) == set(params)]
+            base = next((c for c in configs if c["name"] == "baseline"), None)
+            if base is not None and all(base["values"][k] in {c["values"][k] for c in pool} for k in params):
+                pool.append(base)
         else:
             pool = [c for c in configs if c["name"] == "baseline" or set(c["overrides"]) == {key}]
         values = sorted({c["values"][key] for c in pool})
@@ -624,7 +633,8 @@ def main() -> None:
 
     key = task_key(run_config)
     labels = BASELINE_LABELS[key]
-    header, rows = table_rows(configs, params, baseline, grid=axes is not None)
+    factorial = is_factorial(configs, params)
+    header, rows = table_rows(configs, params, baseline, grid=factorial)
     print_table(configs, header, rows, title)
     write_markdown(run_dir / "summary.md", configs, header, rows, title, BELIEF_WHAT[key])
 
@@ -643,7 +653,7 @@ def main() -> None:
             plot_success_grid(configs, axes, baseline, fig_dir / "success.png")
         else:
             plot_success_bars(configs, fig_dir / "success.png")
-        plot_main_effects(configs, params, baseline, axes is not None, fig_dir / "main_effects.png")
+        plot_main_effects(configs, params, baseline, factorial, fig_dir / "main_effects.png")
     plot_seed_outcomes(configs, fig_dir / "seed_outcomes.png")
     plot_secondary(configs, key, fig_dir / "secondary_metrics.png")
 

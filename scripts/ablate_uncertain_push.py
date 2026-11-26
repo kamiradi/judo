@@ -208,8 +208,34 @@ COM_STAGE_1 = [
     *sweep("controller.horizon", [0.5, 1.5]),  # how far ahead a push's effect on the angle is seen
 ]
 
-# Stage 2: filled in from the stage 1 results.
-COM_STAGE_2: list[tuple[str, dict]] = []
+# Stage 2: a grid over the parameters that raised success in stage 1, crossed with how the ~480-rollout budget is
+# split between control sequences (K) and CoM guesses (M). Reasoning:
+#   num_particles, horizon, w_pusher_proximity - the stage 1 settings that won hard starts (large initial angle error).
+#   w_info                                     - kept in to test whether the info term helps once filter and control
+#                                                are better (at the defaults it changed nothing, and 10+ hurt).
+#   K x M                                      - single-guess planners search 15x more control sequences on the same
+#                                                budget; this tests whether fewer guesses and more sequences help ours.
+# Left out: temperature (its stage 1 gain was within noise), the filter's energy settings (no effect).
+# Run with 20 seeds: only seeds with a large initial angle error separate the settings.
+COM_ROLLOUT_SPLITS = {"32x15": (32, 15), "96x5": (96, 5)}  # K x M, both ~480 rollouts per planning step
+COM_STAGE_2 = [
+    ("baseline", {}),
+    *[
+        (
+            f"{name},KxM={split}",
+            {**overrides, "optimizer.num_rollouts": k, "task.num_plan_particles": m},
+        )
+        for name, overrides in grid(
+            {
+                "task.num_particles": [100, 300],
+                "controller.horizon": [1.0, 1.5],
+                "task.w_pusher_proximity": [0.5, 2.0],
+                "task.w_info": [0.0, 1.0, 5.0],
+            }
+        )
+        for split, (k, m) in COM_ROLLOUT_SPLITS.items()
+    ],
+]
 
 # Stage 3: the baseline ladder in scripts/baselines_com/ (no "defaults" entry: stages 1-2 already compare them).
 COM_STAGES = {1: COM_STAGE_1, 2: COM_STAGE_2, 3: baseline_ablations("baselines_com")}

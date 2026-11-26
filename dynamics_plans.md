@@ -57,3 +57,15 @@ Everything in A, plus a task subclass that changes the following.
 - **Cost:** about 30–50% more code than A, with higher calibration risk.
 - **Upside:** a wrong mass at release means failure, so this option should give the clearest gap between planning
   without the information term and the full method.
+
+## Later: joint belief over position and CoM (compute budget)
+A joint belief over (cart position, CoM offset) needs particles that cover both. Planning can either sample joint
+guesses or cross position guesses with CoM guesses. Both cost more rollouts per planning step for the same coverage.
+
+- **Planning budget.** Under a fixed budget (~480 rollouts per step, the live app's 50 ms at 20 Hz), the joint task
+  will have fewer guesses per kind and/or fewer control sequences than either single task. Some loss of performance
+  should be expected and reported.
+- **What to carry over.** The position task's stage 2 and the CoM task's stage 2 (which crosses sequences K with
+  guesses M at a fixed budget) say where each task is least sensitive. Use them to pick the split.
+- **Filter cost.** The filter's cost also grows: the CoM filter simulates one step per particle per observation, and
+  stage 1 showed it needs ~100–300 particles.
