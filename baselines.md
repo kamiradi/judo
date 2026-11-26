@@ -97,3 +97,78 @@ near any likely guess scores well.
 
 The other options considered were committing to one guess until it is ruled out (likely slow), and adding an
 end-of-horizon reward for moving towards the remaining belief.
+
+# CoM task (`uncertain_com_cylinder_push`): dynamics uncertainty
+
+The same method with an unknown **centre of mass** instead of an unknown cart position. The cart's pose is observed
+(with small noise); its CoM offset θ (2D, in the cart's frame, uniform over a 0.15 m disk) is not. The goal is a
+position **and** an angle: within 0.3 m and 0.1 rad at the same moment, within 15 s. The mathematics is on the
+methodology page (https://claude.ai/artifact/LzvRXzTbJrhYijyNfKL1fA).
+
+## Baseline ladder (`scripts/baselines_com/`)
+
+Every baseline uses the tuned settings (300 belief particles, `w_pusher_proximity` 2.0). Rollouts are matched at
+~480 per planning step: belief-averaged planners use 96 sequences × 5 CoM guesses, single-guess planners 480 × 1.
+There is no "defaults" entry; the defaults are compared in stages 1 and 2.
+
+| Baseline | CoM knowledge |
+|---|---|
+| Oracle (upper bound) | Plans with the true CoM (`true_com`, logged by the sim) |
+| Blind (lower bound) | Belief never updated: averages its plan over 5 guesses drawn from the prior disk |
+| Certainty-equivalent | Same filter; plans with the belief's weighted-mean CoM only (before contact: the cart's centre) |
+| Posterior sampling | Same filter; plans with one CoM drawn from the belief, redrawn every planning step |
+| Expected reward, no info term | Same filter; averages over 5 guesses, `w_info` = 0 |
+| Ours | Same filter; averages over 5 guesses, plus the information term |
+
+## Evidence
+
+- **Gate, 20 seeds, untuned** (`20261126-162122_com_stage3`): oracle 85%, certainty-equivalent 80%, blind 65%. The
+  oracle's failures were spin-in-place stalls from large starting angles.
+- **Stage 1, 10 seeds** (`20261126-165107_com_stage1`): the task is control-limited. More belief particles helped most
+  (30 → 300: 4/10 → 8/10). `w_info` 10 or 25 hurt, 0 changed nothing, and the filter's noise settings had no effect.
+- **Stage 2, 20 seeds, 48-cell grid** (`20261126-201111_com_stage2`; first attempt OOM-killed, see the runner's
+  `release_freed_memory`):
+  - **Rollout split:** 96 × 5 beat 32 × 15 (80 vs 39 discordant pairs, sign test p < 0.001).
+  - **Tuning weights:** `w_pusher_proximity` 2.0 and horizon 1.0 helped mildly (p = 0.08 each).
+  - **Particles:** 100 vs 300 made no clear difference (p = 0.28).
+  - **`w_info`** 0 / 1 / 5 had no effect (discordant pairs split evenly).
+  - Every cell beat the defaults (68% vs 45%).
+- **Pusher friction:** a headless check of the tuned config at pusher–cart friction μ 1.0 and 1.5 (instead of 0.5)
+  solved 2 more of 20 seeds but was no faster. It was kept at 0.5 so the gate and stages 1–2 stay valid.
+- **Stage 3, 30 seeds** (`20261126-230247_com_stage3`):
+
+  | Baseline | Success | Wins / losses vs ours | Time to goal | CoM identified (σ < 2 cm) |
+  |---|---|---|---|---|
+  | Oracle | 97% (29/30) | 4 / 0 | 5.9 ± 0.2 s | — |
+  | Posterior sampling | 90% (27/30) | 3 / 1 | 6.5 ± 0.4 s | 2.8 ± 0.3 s |
+  | Certainty-equivalent | 87% (26/30) | 3 / 2 | 6.0 ± 0.2 s | 2.3 ± 0.2 s |
+  | **Ours** | **83% (25/30)** | — | 6.5 ± 0.2 s | 2.8 ± 0.2 s |
+  | No info term | 77% (23/30) | 1 / 3 | 6.4 ± 0.3 s | 2.9 ± 0.3 s |
+  | Blind | 77% (23/30) | 2 / 4 | 6.5 ± 0.4 s | never (error stays 11 cm) |
+
+  - Among the non-oracle methods, no success difference is significant (all sign tests p ≥ 0.6).
+  - The only clear effect is the oracle's speed: it is faster than ours on 19 of 25 common successes (p = 0.015).
+  - Where the CoM matters, the gaps are in the expected places: on large CoM offsets (≥ median), the oracle solves
+    17/17, blind 11/17 and ours 13/17.
+  - Caveats: the tuned settings were chosen on seeds 0–19, and baselines other than ours were not tuned.
+
+## Interpretation: why the method doesn't separate here
+
+1. **Knowing the CoM is worth little in this task.** Even perfect knowledge (oracle vs blind) wins 7 seeds and loses 1,
+   and is ~0.7 s faster. Re-planning with feedback recovers most episodes with a wrong CoM.
+2. **Blind is a robust planner, not a naive one.** It averages its plans over CoM guesses from the prior, so it hedges
+   against the unknown CoM rather than ignoring it.
+3. **Exploring and making progress are the same action.** Any push toward the goal also reveals the CoM, which every
+   filtering method identifies within ~2–3 s. Active information gathering only pays when the informative action
+   differs from the task action, which explains why `w_info` has no effect in stages 1–3.
+4. **Once the belief has collapsed, the 5 guesses are near-identical.** They spend rollouts that single-guess planners
+   use for a wider control search (480 × 1 vs 96 × 5), which is why posterior sampling and certainty-equivalent sit
+   slightly above ours.
+
+This is the "why not just feedback?" criticism, measured. The contrast with the position task is informative in itself:
+there, ours wins on hard starts because finding the cart needs deliberate probing.
+
+## Next step (proposed)
+
+A dynamics task where the informative action differs from the task action, and a wrong estimate cannot be corrected
+afterwards: poke-and-strike with an unknown mass (plan B in `dynamics_plans.md`).
