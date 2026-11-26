@@ -26,6 +26,7 @@ from judo.belief import DynamicsEnergyParams, ParameterBelief, expected_info_gai
 from judo.gui import slider
 from judo.tasks.cost_functions import quadratic_norm
 from judo.tasks.cylinder_push import GOAL_DISTANCE_THRESHOLD, XML_PATH, CylinderPush, CylinderPushConfig
+from judo.utils.fields import np_1d_field
 
 PUSHER_QPOS_IDX = np.array([0, 1])
 CART_XY_IDX = np.array([2, 3])
@@ -78,7 +79,15 @@ def set_com(models: list[mujoco.MjModel], datas: list[mujoco.MjData], body_id: i
 class UncertainComCylinderPushConfig(CylinderPushConfig):
     """Config for the cylinder push task with an unknown centre of mass."""
 
-    # goal angle and success
+    # Goal pose. Same goal_pos as cylinder push, but without the GUI's generic goal sphere: the scene draws a
+    # see-through copy of the cart at the goal pose instead (the "goal_ghost" mocap body), so the goal angle is visible.
+    goal_pos: np.ndarray = np_1d_field(
+        np.array([0.0, 0.0]),
+        names=["x", "y"],
+        mins=[-1.0, -1.0],
+        maxs=[1.0, 1.0],
+        steps=[0.01, 0.01],
+    )
     goal_yaw: float = 0.0
     w_cart_yaw: float = 1.0
     yaw_tol: float = 0.1
@@ -166,7 +175,37 @@ class UncertainComCylinderPush(CylinderPush):
         marker.rgba = [1.0, 0.55, 0.0, 0.0]
         marker.contype, marker.conaffinity, marker.mass = 0, 0, 0.0
 
+        # Goal pose marker: a flat see-through disc the size of the cart, with a stripe along the goal angle. A mocap
+        # body, so the sim can move it to the configured goal (the viewer draws every body from the sim's poses).
+        # Its geoms never collide and it has no joints, so the physics are unchanged.
+        ghost = spec.worldbody.add_body()
+        ghost.name, ghost.mocap = "goal_ghost", True
+        ghost.pos = [0.0, 0.0, -half_height + 0.003]
+        disc = ghost.add_geom()
+        disc.name, disc.type = "goal_disc", mujoco.mjtGeom.mjGEOM_CYLINDER
+        disc.size = [radius, 0.003, 0.0]
+        disc.rgba = [0.2, 0.7, 0.35, 0.35]
+        goal_stripe = ghost.add_geom()
+        goal_stripe.name, goal_stripe.type = "goal_stripe", mujoco.mjtGeom.mjGEOM_BOX
+        goal_stripe.size = [0.5 * radius, 0.02, 0.002]
+        goal_stripe.pos = [0.5 * radius, 0.0, 0.004]
+        goal_stripe.rgba = [0.1, 0.45, 0.2, 0.9]
+        for geom in (disc, goal_stripe):
+            geom.contype, geom.conaffinity, geom.mass = 0, 0, 0.0
+
         spec.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
+
+    def update_goal_marker(self, data: mujoco.MjData | None = None) -> None:
+        """Move the goal ghost to the configured goal position and angle."""
+        data = self.data if data is None else data
+        mocap_id = self.model.body("goal_ghost").mocapid[0]
+        data.mocap_pos[mocap_id, :2] = self.config.goal_pos[:2]
+        half_yaw = 0.5 * self.config.goal_yaw
+        data.mocap_quat[mocap_id] = [np.cos(half_yaw), 0.0, 0.0, np.sin(half_yaw)]
+
+    def pre_sim_step(self) -> None:
+        """Keep the goal ghost on the goal (the GUI can change it at any time)."""
+        self.update_goal_marker()
 
     @property
     def cart_body_id(self) -> int:
@@ -209,6 +248,7 @@ class UncertainComCylinderPush(CylinderPush):
         self.episode_id = int(np.random.randint(1, 2**31 - 1))
         self.true_com = self.sample_prior(1)[0]
         set_com([self.sim_model], [mujoco.MjData(self.sim_model)], self.cart_body_id, self.true_com[None])
+        self.update_goal_marker()
         mujoco.mj_forward(self.model, self.data)
 
         self._obs_buffer: deque = deque(maxlen=self.config.obs_window)

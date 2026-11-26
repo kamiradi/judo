@@ -70,6 +70,9 @@ def main() -> None:
     def show_frame() -> None:
         i, t = episode_slider.value, step_slider.value
         task.data.qpos[:] = qpos[i, t]
+        if hasattr(task, "update_goal_marker"):  # CoM task: goal pose ghost (goal angle from the task's config default)
+            task.config.goal_pos[:2] = goal_pos[i]
+            task.update_goal_marker()
         mujoco.mj_forward(task.model, task.data)
         viser_model.set_data(task.data)
         viser_model.set_belief(belief_xy[i, t], belief_w[i, t], belief_geom)
