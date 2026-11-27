@@ -65,21 +65,55 @@ def info_gain_from_energy(energy: np.ndarray, weights: np.ndarray) -> np.ndarray
     return (kl * weights).sum(-1)
 
 
-def expected_info_gain_dynamics(features: np.ndarray, weights: np.ndarray, params: DynamicsEnergyParams) -> np.ndarray:
+def expected_info_gain_dynamics(
+    features: np.ndarray,
+    weights: np.ndarray,
+    params: DynamicsEnergyParams,
+    mode: str = "path",
+    mask: np.ndarray | None = None,
+    stride: int = 1,
+) -> np.ndarray:
     """Monte Carlo expected information gain for candidate action sequences under a parameter belief.
 
     For every action sequence k, each particle m is treated in turn as the true parameter: its predicted (noise-free)
     trajectory plays the role of the observations, every particle i is scored by the energy of its own predicted
     trajectory against it, and the KL between the resulting posterior and the prior weights is averaged over m.
 
+    Two ways to score particle i against truth m:
+      * "path": compare the whole predicted trajectories (positions and velocities) at every time step. Open-loop
+        paths drift apart, so this saturates once paths separate, even when the filter learns little per step.
+      * "increment": compare per-step velocity changes along each particle's own path. This is what the filter can
+        learn from one observed transition (it predicts one step from the observed state), without drift. A change
+        over `stride` simulation steps is compared with sigma_vel * sqrt(stride), the scale of `stride` one-step
+        energies summed.
+
     Args:
-        features: Predicted object features, shape (K, M, T, F), one rollout per (action sequence, particle).
+        features: Predicted object features, shape (K, M, T, F), one rollout per (action sequence, particle). The first
+            `params.num_pos` features are positions, the rest velocities.
         weights: Prior weights of the M particles, shape (M,).
         params: Energy parameters.
+        mode: "path" or "increment".
+        mask: Optional (K, M, T) weights per time step of truth m's trajectory; only masked-in steps count (e.g. only
+            steps at which the agent can still act on what it observes). None counts every step.
+        stride: Simulation steps between consecutive time samples in `features` (for "increment").
 
     Returns:
         Expected information gain per action sequence, shape (K,). Non-negative.
     """
-    # (K, M_truth, M_particle, T) -> summed over time
-    energy = dynamics_energy(features[:, :, None], features[:, None], params).sum(-1)
-    return info_gain_from_energy(energy, weights)
+    if mode == "path":
+        energy = dynamics_energy(features[:, :, None], features[:, None], params)  # (K, M_truth, M_particle, T)
+    elif mode == "increment":
+        vel = features[..., params.num_pos :]
+        inc = np.diff(vel, axis=2, prepend=vel[:, :, :1])
+        inc_params = DynamicsEnergyParams(
+            num_pos=0,
+            sigma_pos=params.sigma_pos,
+            sigma_vel=params.sigma_vel * np.sqrt(max(1, stride)),
+            p_outlier=params.p_outlier,
+        )
+        energy = dynamics_energy(inc[:, :, None], inc[:, None], inc_params)
+    else:
+        raise ValueError(f"Unknown info gain mode {mode!r}; expected 'path' or 'increment'.")
+    if mask is not None:
+        energy = energy * np.asarray(mask, dtype=float)[:, :, None, :]
+    return info_gain_from_energy(energy.sum(-1), weights)

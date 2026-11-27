@@ -323,8 +323,13 @@ class UncertainComCylinderPush(CylinderPush):
             project=self.project,
             features=self.cart_features,
             num_particles=self.config.num_particles,
-            jitter=self.config.com_jitter,
+            jitter=self.belief_jitter,
         )
+
+    @property
+    def belief_jitter(self) -> float:
+        """Std of the roughening noise added to resampled CoM particles (m)."""
+        return self.config.com_jitter
 
     def info_weight(self, belief_std: float | None) -> float:
         """Effective info weight: 0 below info_gate_std, linear ramp up to w_info at 2 * info_gate_std."""

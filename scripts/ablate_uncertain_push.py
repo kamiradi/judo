@@ -248,6 +248,59 @@ COM_STAGES = {1: COM_STAGE_1, 2: COM_STAGE_2, 3: baseline_ablations("baselines_c
 
 
 # ---------------------------------------------------------------------------------------------------------------- #
+# Strike task: `uncertain_friction_strike` (judo/tasks/uncertain_friction_strike.py). The goal lies beyond the      #
+# pusher's reach, so the cart must be struck; where it stops depends on the unknown floor friction.                #
+# ---------------------------------------------------------------------------------------------------------------- #
+
+STRIKE_BASELINE = {
+    "task.w_info": 1.0,
+    "task.num_plan_particles": 5,
+    "task.num_particles": 100,
+    "task.info_gate_std": 0.05,
+    "task.info_subsample": 5,
+    "task.param_jitter": 0.02,
+    "task.sigma_pos": 0.005,
+    "task.sigma_vel": 0.01,
+    "task.p_outlier": 0.05,
+    "task.w_rest": 1.0,
+    "task.w_rest_running": 0.1,
+    "task.w_pusher_proximity": 0.1,
+    "task.w_contact": 0.0,
+    "task.mu_min": 0.1,
+    "task.mu_max": 0.4,
+    "task.cart_x_min": -1.0,
+    "task.cart_x_max": -0.6,
+    "task.goal_half_size": 0.5,
+    "controller.horizon": 1.0,
+    "optimizer.num_rollouts": 96,
+    "optimizer.sigma": 2.0,
+    "optimizer.temperature": 0.05,
+}
+
+# Stage 1: one parameter at a time. The prior (mu_min, mu_max), the layout (cart_x_min/max) and the success test
+# (goal_half_size) define the experiment and are not tuned. M (guesses) stays within 5-15; K (control sequences) is
+# varied on its own, so the total number of rollouts is not fixed.
+STRIKE_STAGE_1 = [
+    ("baseline", {}),
+    *sweep("task.w_info", [0.0, 5.0, 10.0, 25.0]),  # does probing pay for itself (0 = never probes on purpose)
+    *sweep("task.num_plan_particles", [10, 15]),  # how finely the strike is hedged over friction guesses (5 = baseline)
+    *sweep(
+        "optimizer.num_rollouts", [32, 192, 480]
+    ),  # how many control sequences find a precise strike (96 = baseline)
+    *sweep("optimizer.sigma", [1.0, 3.0]),  # sample spread: strikes need targets metres ahead, pokes need finesse
+    *sweep("optimizer.temperature", [0.01, 0.2]),  # how greedily MPPI picks among the sampled actions
+    *sweep("controller.horizon", [0.6, 1.5]),  # room for a poke and a strike within one plan
+    *sweep("task.info_gate_std", [0.02, 0.1]),  # how precise the friction must be before the info term stops
+    *sweep("task.sigma_vel", [0.005, 0.02]),  # how sharply one observed transition separates guesses
+    *sweep("task.num_particles", [30, 300]),  # filter resolution over the friction range
+    *sweep("task.w_rest_running", [0.0, 0.5]),  # time pressure: how much a delay before the strike costs
+    *sweep("task.w_pusher_proximity", [0.0, 0.5]),  # pull to the point behind the cart vs freedom to poke
+]
+
+STRIKE_STAGES = {1: STRIKE_STAGE_1, 2: [], 3: baseline_ablations("baselines_strike")}
+
+
+# ---------------------------------------------------------------------------------------------------------------- #
 # Task-specific pieces. The belief error is |belief mean - latent truth| in both tasks (metres).                    #
 # ---------------------------------------------------------------------------------------------------------------- #
 
@@ -258,6 +311,10 @@ def _cart_xy(sim) -> np.ndarray:  # noqa: ANN001
 
 def _true_com(sim) -> np.ndarray:  # noqa: ANN001
     return np.asarray(sim.task.true_com)
+
+
+def _true_log_mu(sim) -> np.ndarray:  # noqa: ANN001
+    return np.array([sim.task.true_log_mu])
 
 
 @dataclass(frozen=True)
@@ -295,6 +352,19 @@ TASKS = {
         # median distance of a uniform draw over the prior disk from its centre
         hard_threshold=COM_BASELINE["task.com_radius"] / np.sqrt(2),
     ),
+    "strike": TaskSetup(
+        task="uncertain_friction_strike",
+        baseline=STRIKE_BASELINE,
+        stages=STRIKE_STAGES,
+        latent=_true_log_mu,
+        prior_center=lambda sim: np.array([np.mean(sim.task.log_mu_range)]),
+        # the true friction's mark on the friction ruler
+        reference=lambda sim: sim.task.belief_viz_positions(
+            _true_log_mu(sim)[None], np.concatenate([sim.task.data.qpos, sim.task.data.qvel])
+        )[0],
+        # median |log mu - centre| of a log-uniform prior: a quarter of its log range
+        hard_threshold=float(np.log(STRIKE_BASELINE["task.mu_max"] / STRIKE_BASELINE["task.mu_min"]) / 4),
+    ),
 }
 
 
@@ -321,6 +391,12 @@ class Episode:
     identify_time: float  # first plan step at which the belief std drops below info_gate_std (nan if never)
     final_pos_err: float  # |cart - goal| at the end
     final_yaw_err: float  # |cart angle - goal angle| at the end (nan for tasks without an angle goal)
+    # strike task (tasks with a reach limit): when the cart first left the pusher's reach, the belief error then,
+    # and how many separate touches came before it, the strike included (1 = struck without poking first;
+    # nan / nan / 0 for other tasks)
+    release_time: float
+    release_belief_err: float
+    num_pokes: int
     belief_err_trace: list[float] = field(default_factory=list, repr=False)  # |belief mean - truth| per plan step
     # trajectory, only kept when recording
     qpos: np.ndarray | None = field(default=None, repr=False)  # (T, nq)
@@ -343,6 +419,9 @@ class Episode:
         "identify_time",
         "final_pos_err",
         "final_yaw_err",
+        "release_time",
+        "release_belief_err",
+        "num_pokes",
     )
 
 
@@ -408,8 +487,10 @@ def run_episode(
     num_steps = int(round(duration / sim.timestep))
     qpos_log, xy_log, w_log, ref_log = [], [], [], []
     errors, plan_ms = [], []
-    contacts = 0
-    first_contact_time = success_time = identify_time = float("nan")
+    contacts = num_pokes = 0
+    first_contact_time = success_time = identify_time = release_time = release_belief_err = float("nan")
+    reachable = getattr(sim.task, "reachable", None)  # tasks with a reach limit (poke and strike)
+    was_touching = False
 
     for step in range(num_steps):
         t = sim.task.data.time
@@ -431,10 +512,17 @@ def run_episode(
 
         sim.step(ctrl.action(t))
 
-        if in_contact(sim.task):
+        touching = in_contact(sim.task)
+        if touching:
             contacts += 1
             if np.isnan(first_contact_time):
                 first_contact_time = sim.task.data.time
+        if reachable is not None and np.isnan(release_time):
+            num_pokes += int(touching and not was_touching)
+            if not reachable(np.concatenate([sim.task.data.qpos, sim.task.data.qvel])):
+                release_time = sim.task.data.time
+                release_belief_err = float(np.linalg.norm(ctrl.belief.mean() - setup.latent(sim)))
+        was_touching = touching
         if np.isnan(success_time) and sim.task.success(sim.task.model, sim.task.data):
             success_time = sim.task.data.time
 
@@ -455,6 +543,9 @@ def run_episode(
         belief_err_trace=errors,
         final_pos_err=float(np.linalg.norm(sim.task.data.qpos[2:4] - sim.task.config.goal_pos[:2])),
         final_yaw_err=yaw_error(sim.task.data) if yaw_error is not None else float("nan"),
+        release_time=release_time,
+        release_belief_err=release_belief_err,
+        num_pokes=num_pokes,
         qpos=np.array(qpos_log) if record else None,
         belief_xy=np.array(xy_log) if record else None,
         belief_w=np.array(w_log) if record else None,

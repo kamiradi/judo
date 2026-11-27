@@ -19,8 +19,8 @@ Writes, into the run folder:
     figures/baselines*.png          stage 3 only: success per baseline, overall and split by prior error
     figures/belief_error.png        stage 3 only: belief error over time per baseline (from belief_error.json)
 
-Works for both tasks of the runner (run_config["task_key"]: "position" or "com"). Every config is paired against
-"baseline", or against "ours" in a run without one (CoM stage 3).
+Works for every task of the runner (run_config["task_key"]: "position", "com" or "strike"). Every config is paired
+against "baseline", or against "ours" in a run without one (CoM and strike stage 3).
 
 Error bars on success rates are 95% Wilson intervals: with n=20 the usual p +- 1.96*SE leaves [0, 1] near p=1 and
 collapses to zero width at p=1, while Wilson stays inside [0, 1]. Continuous metrics use mean +- standard error.
@@ -100,11 +100,14 @@ CONTINUOUS_METRICS = (
     "identify_time",
     "final_pos_err",
     "final_yaw_err",
+    "release_time",
+    "release_belief_err",
+    "num_pokes",
 )
 
 
 def task_key(run_config: dict) -> str:
-    """'position' or 'com' (runs from before the CoM task have no task_key and are position runs)."""
+    """'position', 'com' or 'strike' (runs from before the CoM task have no task_key and are position runs)."""
     return run_config.get("task_key", "position")
 
 
@@ -278,8 +281,9 @@ def write_markdown(
         f"- **95% CI**: Wilson interval of the success rate. **Δ pts**: difference to {ref} in percentage points.",
         f"- **W/L**: seeds this config solved and {ref} did not / {ref} solved and this config did not.",
         "- **no touch**: episodes in which the pusher never touched the cart.",
-        "- **contact s**: mean time of first contact, over episodes that touched. **belief m**: mean final distance",
-        f"  between belief mean and {belief_what}. Standard errors for both are in figures/secondary_metrics.png.",
+        "- **contact s**: mean time of first contact, over episodes that touched. **belief m**: mean final error",
+        f"  |belief mean − {belief_what}| (metres; log μ for the strike task). Standard errors for both are in",
+        "  figures/secondary_metrics.png.",
         f"- **plan ms**: mean planning time per step (the live app has {LIVE_PLAN_BUDGET_MS:.0f} ms).",
     ]
     path.write_text("\n".join(lines) + "\n")
@@ -440,10 +444,20 @@ BASELINE_LABELS = {
         "no_info": "average CoMs,\nno info term",
         "ours": "ours: average\n+ info gain",
     },
+    "strike": {
+        "oracle": "oracle\n(knows friction)",
+        "blind": "blind\n(ignores motion)",
+        "certainty_equivalent": "plan with\nmean friction",
+        "posterior_sampling": "plan with one\nsampled friction",
+        "no_info": "average frictions,\nno info term",
+        "ours_path_ig": "ours with\npath info term",
+        "ours": "ours: average\n+ info gain",
+    },
 }
-# What the belief tracks, and what "prior error" means, per task (for axis labels and legends).
-BELIEF_WHAT = {"position": "true cart position", "com": "true CoM"}
-PRIOR_ERROR_WHAT = {"position": "prior error", "com": "CoM offset from centre"}
+# What the belief tracks, its unit, and what "prior error" means, per task (for axis labels and legends).
+BELIEF_WHAT = {"position": "true cart position", "com": "true CoM", "strike": "true log friction"}
+BELIEF_UNIT = {"position": "m", "com": "m", "strike": "log μ"}
+PRIOR_ERROR_WHAT = {"position": "prior error", "com": "CoM offset from centre", "strike": "|log μ − prior centre|"}
 BOUNDS, OURS = {"oracle", "blind"}, {"ours"}
 
 
@@ -557,9 +571,12 @@ def plot_secondary(configs: list[dict], task: str, path: Path) -> None:
     cs = configs[::-1]
     metrics = [
         ("first_contact_time", "first contact (s)\nepisodes that touched"),
-        ("final_belief_err", "final CoM error (m)" if task == "com" else "final belief error (m)"),
+        ("final_belief_err", f"final {BELIEF_WHAT[task].removeprefix('true ')} error ({BELIEF_UNIT[task]})"),
         ("identify_time", "time to identify (s)\nbelief std < info gate"),
         ("final_yaw_err", "final angle error (rad)"),
+        ("release_time", "time of release (s)\ncart leaves reach"),
+        ("release_belief_err", f"belief error at release\n({BELIEF_UNIT[task]})"),
+        ("num_pokes", "touches before release\n(strike included)"),
         ("mean_plan_ms", "planning time per step (ms)"),
     ]
     # keep a metric only if this run logged it and it is not NaN everywhere (e.g. no angle goal in the position task)
@@ -616,7 +633,7 @@ def plot_belief_error(run_dir: Path, configs: list[dict], labels: dict[str, str]
                 label=labels.get(c["name"], c["name"]).replace("\n", " "))  # fmt: skip
         ax.fill_between(t, mean - se, mean + se, color=colour, alpha=0.15, linewidth=0)
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("|belief mean − " + BELIEF_WHAT[key] + "| (m)")
+    ax.set_ylabel(f"|belief mean − {BELIEF_WHAT[key]}| ({BELIEF_UNIT[key]})")
     ax.set_ylim(bottom=0)
     ax.legend(fontsize=7, ncol=2)
     ax.set_title(f"Belief error over time (mean ± SE over {cs[0]['n']} seeds)")

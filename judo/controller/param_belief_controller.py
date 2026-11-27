@@ -10,7 +10,7 @@ states:
   3. Every control sequence is rolled out once per guess (K * M rollouts) from the measured state; rollout k*M + m
      uses a model carrying guess m. Rewards come from the task's belief-aware reward, exactly as for state beliefs.
 
-The task must provide `make_belief()`, `apply_params(models, datas, thetas)`, `belief_reward(...)`,
+The task must provide `make_belief()`, `belief_jitter`, `apply_params(models, datas, thetas)`, `belief_reward(...)`,
 `belief_viz_positions(thetas, state)`, and publish `episode_id` and `obs_*` entries in its sim metadata
 (see `judo.tasks.uncertain_com_cylinder_push`).
 """
@@ -52,7 +52,7 @@ class ParamBeliefController(BeliefAwareController):
 
         # pick up live config changes from the GUI
         self.belief.params = self.task.energy_params
-        self.belief.jitter = cfg.com_jitter
+        self.belief.jitter = self.task.belief_jitter
 
         obs_time = np.asarray(metadata["obs_time"])
         for i in np.flatnonzero(obs_time > self._last_obs_time):
@@ -87,6 +87,10 @@ class ParamBeliefController(BeliefAwareController):
         assert self.plan_particles is not None
         num_particles = self.num_plan_particles
         num_rollouts = self.optimizer_cfg.num_rollouts
+        # Tasks whose reward depends on the guessed parameter (e.g. a predicted resting point) read the guesses here;
+        # rollout k*M + m uses plan_params[m]. Set here rather than in _pre_optimization so that subclasses that
+        # replace plan_particles (oracle, certainty-equivalent baselines) are seen by the reward too.
+        self.task.plan_params = self.plan_particles
         if not self._params_applied:
             # MJRolloutBackend keeps one model/data pair per thread, so thread k*M + m can carry guess m.
             # (Accessing its model list is the only use of the backend's internals.)
