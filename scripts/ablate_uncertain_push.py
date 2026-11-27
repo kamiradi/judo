@@ -270,7 +270,7 @@ STRIKE_BASELINE = {
     "task.mu_max": 0.4,
     "task.cart_x_min": -1.0,
     "task.cart_x_max": -0.6,
-    "task.goal_half_size": 0.5,
+    "task.goal_half_size": 0.25,
     "controller.horizon": 1.0,
     "optimizer.num_rollouts": 480,
     "optimizer.sigma": 2.0,
@@ -278,6 +278,7 @@ STRIKE_BASELINE = {
 }
 
 # Stage 1: one parameter at a time, around defaults set from the w_contact probe (w_contact 2, w_info 5, K 480 x M 5).
+# It ran with a 1 m goal square (goal_half_size 0.5); results in dynamics_plans.md.
 # The prior (mu_min, mu_max), the layout (cart_x_min/max) and the success test (goal_half_size) define the experiment
 # and are not tuned. M (guesses) stays within 5-15; K (control sequences) is varied on its own, so the total number of
 # rollouts is not fixed. The filter's settings are left out: friction is already identified to ~2% after a poke.
@@ -298,7 +299,34 @@ STRIKE_STAGE_1 = [
     *sweep("controller.horizon", [0.6, 1.5]),  # room for a poke and a strike, and how much of the coast is simulated
 ]
 
-STRIKE_STAGES = {1: STRIKE_STAGE_1, 2: [], 3: baseline_ablations("baselines_strike")}
+# Stage 2: a grid over the settings stage 1 pointed at, with the goal shrunk to a 0.5 m square (goal_half_size 0.25).
+# Stage 1 (1 m square) was within noise at 10 seeds; the leads were M 15, w_contact 0-1 and a 0.6 s horizon, and
+# no-info did as well as ours because the friction it learns passively is accurate enough for a 1 m square.
+#   num_plan_particles  5 / 15     hedging the strike over more friction guesses (15 is 3x the rollouts at K 480)
+#   w_contact           0 / 1 / 2  the contact penalty taxes the strike as well as long informative pushes
+#   horizon             0.6 / 1.0  shorter plans struck more precisely in stage 1
+#   w_info              0 / 5      no-info and ours paired in every cell, so the information term's effect is measured
+#                                  under each setting rather than tuned away
+# The baseline (M 5, w_contact 2, horizon 1.0, w_info 5) is a grid cell, so it runs once, under its own name. M is
+# the outer axis: the M 15 cells need ~9 GB per worker, so run them separately with fewer workers.
+# Run with 20 seeds.
+STRIKE_STAGE_2 = [
+    ("baseline", {}),
+    *[
+        (name, overrides)
+        for name, overrides in grid(
+            {
+                "task.num_plan_particles": [5, 15],
+                "task.w_contact": [0.0, 1.0, 2.0],
+                "controller.horizon": [0.6, 1.0],
+                "task.w_info": [0.0, 5.0],
+            }
+        )
+        if any(STRIKE_BASELINE[k] != v for k, v in overrides.items())
+    ],
+]
+
+STRIKE_STAGES = {1: STRIKE_STAGE_1, 2: STRIKE_STAGE_2, 3: baseline_ablations("baselines_strike")}
 
 
 # ---------------------------------------------------------------------------------------------------------------- #

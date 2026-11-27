@@ -104,9 +104,10 @@ class UncertainFrictionStrikeConfig(CylinderPushConfig):
     cart_x_max: float = -0.6
     goal_dist_min: float = 1.5
     goal_dist_max: float = 3.0
-    # success: the cart at rest with its centre inside the goal square (side 2 * goal_half_size; 1 m = 2 x 2 floor
-    # grid squares)
-    goal_half_size: float = 0.5
+    # success: the cart at rest with its centre inside the goal square (side 2 * goal_half_size; 0.5 m = one floor
+    # grid square). With a 1 m square the ~7% friction error a planner picks up passively during its wind-up already
+    # lands inside, so probing would not be needed.
+    goal_half_size: float = 0.25
     rest_speed: float = 0.05
     # prior over the floor friction: log-uniform on [mu_min, mu_max]
     mu_min: float = 0.1
