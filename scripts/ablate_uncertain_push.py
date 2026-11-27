@@ -253,7 +253,7 @@ COM_STAGES = {1: COM_STAGE_1, 2: COM_STAGE_2, 3: baseline_ablations("baselines_c
 # ---------------------------------------------------------------------------------------------------------------- #
 
 STRIKE_BASELINE = {
-    "task.w_info": 1.0,
+    "task.w_info": 5.0,
     "task.num_plan_particles": 5,
     "task.num_particles": 100,
     "task.info_gate_std": 0.05,
@@ -265,36 +265,37 @@ STRIKE_BASELINE = {
     "task.w_rest": 1.0,
     "task.w_rest_running": 0.1,
     "task.w_pusher_proximity": 0.1,
-    "task.w_contact": 0.0,
+    "task.w_contact": 2.0,
     "task.mu_min": 0.1,
     "task.mu_max": 0.4,
     "task.cart_x_min": -1.0,
     "task.cart_x_max": -0.6,
     "task.goal_half_size": 0.5,
     "controller.horizon": 1.0,
-    "optimizer.num_rollouts": 96,
+    "optimizer.num_rollouts": 480,
     "optimizer.sigma": 2.0,
     "optimizer.temperature": 0.05,
 }
 
-# Stage 1: one parameter at a time. The prior (mu_min, mu_max), the layout (cart_x_min/max) and the success test
-# (goal_half_size) define the experiment and are not tuned. M (guesses) stays within 5-15; K (control sequences) is
-# varied on its own, so the total number of rollouts is not fixed.
+# Stage 1: one parameter at a time, around defaults set from the w_contact probe (w_contact 2, w_info 5, K 480 x M 5).
+# The prior (mu_min, mu_max), the layout (cart_x_min/max) and the success test (goal_half_size) define the experiment
+# and are not tuned. M (guesses) stays within 5-15; K (control sequences) is varied on its own, so the total number of
+# rollouts is not fixed. The filter's settings are left out: friction is already identified to ~2% after a poke.
+# What the probe showed: with a small contact penalty ours probes and identifies the friction, but its strike misses;
+# most sweeps below target strike precision.
 STRIKE_STAGE_1 = [
     ("baseline", {}),
-    *sweep("task.w_info", [0.0, 5.0, 10.0, 25.0]),  # does probing pay for itself (0 = never probes on purpose)
+    *sweep("task.w_info", [0.0, 10.0, 25.0]),  # does probing pay for itself (0 = never probes on purpose)
+    *sweep("task.w_contact", [0.0, 1.0, 5.0]),  # long informative pushes vs the cost of probing at all
+    *sweep("task.w_rest", [0.5, 3.0, 5.0]),  # accuracy of the resting point vs the contact cost of the strike itself
+    *sweep("task.w_pusher_proximity", [0.0, 0.5, 1.0]),  # pull back onto the cart-goal line after a poke
+    *sweep("task.w_rest_running", [0.0, 0.5]),  # time pressure: room to line up after a poke vs striking early
+    *sweep("task.info_gate_std", [0.02, 0.1]),  # how precise the friction must be before the info term stops
     *sweep("task.num_plan_particles", [10, 15]),  # how finely the strike is hedged over friction guesses (5 = baseline)
-    *sweep(
-        "optimizer.num_rollouts", [32, 192, 480]
-    ),  # how many control sequences find a precise strike (96 = baseline)
+    *sweep("optimizer.num_rollouts", [96, 192]),  # fewer control sequences than the baseline's 480
     *sweep("optimizer.sigma", [1.0, 3.0]),  # sample spread: strikes need targets metres ahead, pokes need finesse
     *sweep("optimizer.temperature", [0.01, 0.2]),  # how greedily MPPI picks among the sampled actions
-    *sweep("controller.horizon", [0.6, 1.5]),  # room for a poke and a strike within one plan
-    *sweep("task.info_gate_std", [0.02, 0.1]),  # how precise the friction must be before the info term stops
-    *sweep("task.sigma_vel", [0.005, 0.02]),  # how sharply one observed transition separates guesses
-    *sweep("task.num_particles", [30, 300]),  # filter resolution over the friction range
-    *sweep("task.w_rest_running", [0.0, 0.5]),  # time pressure: how much a delay before the strike costs
-    *sweep("task.w_pusher_proximity", [0.0, 0.5]),  # pull to the point behind the cart vs freedom to poke
+    *sweep("controller.horizon", [0.6, 1.5]),  # room for a poke and a strike, and how much of the coast is simulated
 ]
 
 STRIKE_STAGES = {1: STRIKE_STAGE_1, 2: [], 3: baseline_ablations("baselines_strike")}

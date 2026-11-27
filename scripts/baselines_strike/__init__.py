@@ -21,7 +21,7 @@ TUNED: dict = {}
 
 # Code defaults of the rollout split (judo/optimizers/overrides.py, UncertainFrictionStrikeConfig); the runner's
 # check_baseline() keeps STRIKE_BASELINE equal to them.
-DEFAULT_NUM_ROLLOUTS = 96
+DEFAULT_NUM_ROLLOUTS = 480
 DEFAULT_NUM_PLAN_PARTICLES = 5
 
 # Single-guess planners get the same number of rollouts as ours.

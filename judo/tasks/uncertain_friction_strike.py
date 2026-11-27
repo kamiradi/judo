@@ -118,7 +118,7 @@ class UncertainFrictionStrikeConfig(CylinderPushConfig):
     # cost per unit fraction of the horizon spent with the pusher touching the cart. Long pushes reveal the friction
     # while the controller can still adjust, which would make deliberate probing unnecessary; this makes them
     # expensive for every controller, while short strikes and pokes stay cheap.
-    w_contact: float = 0.0
+    w_contact: float = 2.0
     w_pusher_proximity: float = 0.1
     w_pusher_velocity: float = 0.0
     w_cart_position: float = 0.0
@@ -134,7 +134,7 @@ class UncertainFrictionStrikeConfig(CylinderPushConfig):
     sigma_vel: float = 0.01
     p_outlier: float = 0.05
     # belief-aware planning: per-step ("increment") information, counted only while the cart is reachable
-    w_info: float = 1.0
+    w_info: float = 5.0
     info_subsample: int = 5
     info_mode: str = "increment"
     info_reachable_only: bool = True

@@ -46,7 +46,7 @@ def set_default_cylinder_push_overrides() -> None:
 
     # Strikes need position targets metres ahead of the pusher, so the samples need far more spread than for pushing.
     set_config_overrides(
-        "uncertain_friction_strike", MPPIConfig, {"num_rollouts": 96, "sigma": 2.0, "use_noise_ramp": False}
+        "uncertain_friction_strike", MPPIConfig, {"num_rollouts": 480, "sigma": 2.0, "use_noise_ramp": False}
     )
 
 
