@@ -108,6 +108,62 @@ Related work: Aoyama et al., "Poke and Strike: Learning Task-Informed Exploratio
     - better strike precision after probing (K, σ, temperature, horizon), then the gate and stage 1.
 - **The alternative option C, not tried:** gate the task-loss energy while the belief is wide.
 
+### Stage 1 results (defaults `w_contact` 2, `w_info` 5, K 480 × M 5; commit 52db609; 10 seeds)
+Run in three parts and merged into `out/ablations/20261127-strike_stage1_combined` (table in `summary.md`, figures
+in `figures/`):
+- `20261127-020043`: the reward and information configs. It was OOM-killed with `info_gate_std=0.1` at 6 of 10
+  seeds.
+- `20261127-103405`: the baseline and the search configs.
+- `20261127-153950`: M 10 and M 15.
+
+The baseline ran in two of those parts and was identical seed for seed, so episodes are deterministic given the seed.
+
+| Config | Success | Median miss (m) | log μ error at release (median) |
+|---|---|---|---|
+| `num_plan_particles` 15 | 8/10 (W/L 6/0) | 0.37 | 0.013 |
+| `w_contact` 0 | 7/10 (6/1) | 0.49 | 0.018 |
+| `w_contact` 1 | 6/10 | 0.57 | 0.017 |
+| `horizon` 0.6 | 6/10 | 0.44 | 0.083 |
+| `w_info` 0 (no-info) | 5/10 (3/0) | 0.50 | 0.071 |
+| `w_info` 10 / `temperature` 0.2 / `w_pusher_proximity` 0.5 | 5/10 each | 0.47–0.63 | 0.012–0.029 |
+| `sigma` 3, `horizon` 1.5, `w_rest` 3 / 5 | 4/10 each | 0.58–0.92 | 0.013–0.052 |
+| K 96 / K 192 | 3/10, 2/10 | 0.93, 0.79 | 0.10, 0.13 |
+| **baseline** | **2/10** | **0.78** | **0.012** |
+| M 10, `w_info` 25, `w_rest` 0.5 | 2/10 each | 0.99–1.71 | 0.007–0.016 |
+| `sigma` 1, `w_pusher_proximity` 1 | 1/10 each | 1.06, 0.88 | 0.04, 0.02 |
+
+- **Noise dominates at 10 seeds.**
+  - The sweeps aren't monotonic: M 5/10/15 gives 2/2/8 of 10, and K 96/192/480 gives 3/2/2.
+  - The baseline sits in the bottom third; the median config is 4/10, and the pooled rate is 96/266 = 36%.
+  - Only M 15 passes a paired sign test (6/0, p ≈ 0.03), and it doesn't survive correction for 26 comparisons.
+  - M 15 at K 480 is also 3× the rollouts of the baseline, so it can't yet be credited to the number of guesses.
+- **The information term works, but this layout barely needs it.**
+  - `w_info` 5 cuts the median log-μ error at release from 0.071 (no-info) to 0.012.
+  - Yet no-info succeeds more often (5/10 against 2/10; W/L 3/0, not significant).
+  - The passive identification no-info gets, ~7% in μ, is a coast error of ~0.15–0.25 m, inside the ±0.5 m square.
+- **Strike precision is the bottleneck, not the belief.**
+  - Over all 264 released episodes, success is 49% with log-μ error < 0.02, 32–34% at 0.02–0.1, and 12–19% above 0.1.
+  - So the belief matters, but half the strikes miss even with μ known to 2%.
+  - The earlier miss diagnostic showed why: the planner releases at the wrong speed (short at ~0.76×, long at
+    ~1.23×), while the physics and the belief are fine.
+- **`w_contact`:** 0 and 1 beat 2 and 5, with the release error still ~1.7%. The penalty costs more strike quality
+  than it buys separation.
+- **Search:**
+  - Shorter horizon (0.6 s), hotter temperature (0.2) and wider noise (σ 3) help.
+  - σ 1 hurts (1/10).
+  - K 96 and K 192 match K 480 on success but identify less before release.
+- **Plan times aren't comparable across the three parts:** they ran with different worker counts (12 against 4).
+
+**Proposed stage 2** (not yet in the runner):
+- 20 seeds;
+- `w_contact` {0, 1, 2} × M {5, 15} × horizon {0.6, 1.0} × `w_info` {0, 5}, so no-info and ours are paired in every
+  cell: 24 cells, 480 episodes;
+- run the M 15 cells with ≤ 4 workers (~9 GB each).
+
+**Open decision:** this layout's goal is loose enough that passive identification nearly suffices. To make
+information matter, either shrink the square to 0.5 m (one grid square) or move the goals farther out, so the coast
+error from ~7% in μ exceeds the tolerance.
+
 ## Later: joint belief over position and CoM (compute budget)
 A joint belief over (cart position, CoM offset) needs particles that cover both. Planning can either sample joint
 guesses or cross position guesses with CoM guesses. Both cost more rollouts per planning step for the same coverage.
