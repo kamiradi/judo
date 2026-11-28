@@ -2,15 +2,16 @@
 
 """Headless ablations for the uncertain cylinder push tasks: which parameters raise the success rate?
 
-Two tasks, chosen with --task:
-    position  `uncertain_cylinder_push`      the cart's position is unknown (state uncertainty)
-    com       `uncertain_com_cylinder_push`  the cart's centre of mass is unknown (dynamics uncertainty)
+Three tasks, chosen with --task:
+    position  `uncertain_cylinder_push`          the cart's position is unknown (state uncertainty)
+    com       `uncertain_com_cylinder_push`      the cart's centre of mass is unknown (dynamics uncertainty)
+    pos_com   `uncertain_pos_com_cylinder_push`  both are unknown; the CoM is only estimated once the cart is localized
 
 Read this file top to bottom:
-    BASELINE / COM_BASELINE  - the reference settings every ablation is compared against.
-    STAGE_1 / COM_STAGE_1    - one parameter changed at a time from the baseline.
-    STAGE_2 / COM_STAGE_2    - a small grid over the parameters that mattered most in stage 1 (edit after stage 1).
-    STAGE_3 / COM_STAGE_3    - the tuned method against baselines (scripts/baselines/, scripts/baselines_com/).
+    BASELINE / COM_BASELINE / POS_COM_BASELINE  - the reference settings every ablation is compared against.
+    STAGE_1 / COM_STAGE_1 / POS_COM_STAGE_1     - one parameter changed at a time from the baseline.
+    STAGE_2 / COM_STAGE_2 / POS_COM_STAGE_2     - a small grid over the parameters that mattered most in stage 1.
+    STAGE_3 (and the CoM / pos_com stage 3)      - the tuned method against baselines (scripts/baselines*/).
     TASKS         - everything task-specific: which latent quantity the belief tracks, what counts as a hard start.
     run_episode() - one closed-loop episode: sim + belief-aware MPPI, exactly as in the live app's loop.
     main()        - runs every (ablation, seed) pair and writes the logs described below.
@@ -20,6 +21,7 @@ Usage (from the repo root, inside the pixi shell):
     python scripts/ablate_uncertain_push.py --stage 1 --only baseline --only w_info=10.0 --seeds 30
     python scripts/ablate_uncertain_push.py --stage 2 --seeds 20           # 18 grid cells x 20 seeds
     python scripts/ablate_uncertain_push.py --task com --stage 1           # CoM task
+    python scripts/ablate_uncertain_push.py --task pos_com --stage 3 --only ours --only oracle --only blind --seeds 1
 
 Output, in out/ablations/<timestamp>_<task>_stage<N>/:
     run_config.json          baseline, ablations, seeds, duration, git commit
@@ -31,8 +33,8 @@ Output, in out/ablations/<timestamp>_<task>_stage<N>/:
     trajectories/<name>.h5   every episode of that ablation, for replay with scripts/replay_uncertain_push.py;
                              written as soon as all its seeds are done
 
-Seeds are paired: seed s gives the same initial pusher/cart positions and the same prior noise (position task) or
-true centre of mass (CoM task) in every ablation, so "w_info=10 won on seed 3 where baseline failed" is a
+Seeds are paired: seed s gives the same initial pusher/cart positions and the same prior noise (position task),
+true centre of mass (CoM task) or both (pos_com task) in every ablation, so "w_info=10 won on seed 3 where baseline failed" is a
 like-for-like comparison.
 
 Caveats:
@@ -63,7 +65,7 @@ import h5py
 import numpy as np
 
 OPTIMIZER = "mppi"
-SIM_DT = 0.02  # <option timestep> of judo/models/xml/cylinder_push.xml, shared by both tasks
+SIM_DT = 0.02  # <option timestep> of judo/models/xml/cylinder_push.xml, shared by all three tasks
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # ============================================================================================================== #
@@ -248,7 +250,62 @@ COM_STAGES = {1: COM_STAGE_1, 2: COM_STAGE_2, 3: baseline_ablations("baselines_c
 
 
 # ---------------------------------------------------------------------------------------------------------------- #
-# Task-specific pieces. The belief error is |belief mean - latent truth| in both tasks (metres).                    #
+# Joint task: `uncertain_pos_com_cylinder_push` (judo/tasks/uncertain_pos_com_cylinder_push.py). The cart's position   #
+# (touch only) and its centre of mass are both unknown; its yaw is measured (IMU). The goal is a position and angle.  #
+# The CoM belief is only updated while the position belief std is below localized_std (the gate).                   #
+# ---------------------------------------------------------------------------------------------------------------- #
+
+POS_COM_BASELINE = {
+    "task.num_particles": 100,
+    "task.num_com_particles": 300,
+    "task.num_plan_particles": 10,
+    "task.localized_std": 0.03,
+    "task.w_info_pos": 10.0,
+    "task.w_info_com": 1.0,
+    "task.info_gate_std": 0.05,
+    "task.com_info_gate_std": 0.02,
+    "task.info_subsample": 5,
+    "task.prior_sigma": 0.5,
+    "task.com_radius": 0.15,
+    "task.process_noise": 0.002,
+    "task.com_jitter": 0.003,
+    "task.w_pusher_proximity": 2.0,
+    "task.w_cart_yaw": 1.0,
+    "task.yaw_tol": 0.1,
+    "controller.horizon": 1.0,
+    "optimizer.num_rollouts": 48,
+    "optimizer.temperature": 0.05,
+}
+
+# Stage 1: one parameter at a time. The priors (prior_sigma, com_radius) and the success test (yaw_tol) define the
+# experiment and are not tuned. The K x M splits keep ~480 rollouts per planning step (baseline 48 x 10).
+POS_COM_ROLLOUT_SPLITS = {"32x15": (32, 15), "96x5": (96, 5)}
+POS_COM_STAGE_1 = [
+    ("baseline", {}),
+    *sweep("task.localized_std", [0.01, 0.05, float("inf")]),  # the gate: stricter, looser, off (ungated)
+    *sweep("task.w_info_pos", [0.0, 1.0, 25.0]),  # contact info term (position task tuned: 10)
+    *sweep("task.w_info_com", [0.0, 5.0]),  # yaw-dynamics info term (no effect in the CoM task)
+    *sweep("task.num_particles", [30, 300]),  # position particles: depletion vs filter cost
+    *sweep("task.num_com_particles", [100, 500]),  # CoM particles (CoM task tuned: 300)
+    *sweep("task.process_noise", [0.005, 0.01]),  # pushes on the floor are kicks the particles don't reproduce
+    *[
+        (f"KxM={split}", {"optimizer.num_rollouts": k, "task.num_plan_particles": m})
+        for split, (k, m) in POS_COM_ROLLOUT_SPLITS.items()
+    ],  # position task preferred more guesses, the CoM task more sequences
+    *sweep("task.w_pusher_proximity", [0.5]),  # pull to the point behind the cart (CoM task tuned: 2.0)
+    *sweep("controller.horizon", [1.5]),  # how far ahead a push's effect on contacts and the angle is seen
+    *sweep("optimizer.temperature", [0.01, 0.2]),  # how greedily MPPI picks among the sampled actions
+]
+
+# Stage 2: fill in after stage 1 (a grid over the stage 1 movers, crossed with the K x M split).
+POS_COM_STAGE_2: list[tuple[str, dict]] = []
+
+POS_COM_STAGES = {1: POS_COM_STAGE_1, 2: POS_COM_STAGE_2, 3: baseline_ablations("baselines_pos_com")}
+
+
+# ---------------------------------------------------------------------------------------------------------------- #
+# Task-specific pieces. The belief error is |belief mean - latent truth| (metres): cart position, CoM offset, or   #
+# (pos_com) cart position, with the CoM error logged separately.                    #
 # ---------------------------------------------------------------------------------------------------------------- #
 
 
@@ -271,6 +328,7 @@ class TaskSetup:
     prior_center: Callable  # sim -> centre of the prior at t=0 (prior mean / zero offset)
     reference: Callable  # sim -> xy of the marker drawn in replay (prior mean / true CoM on the cart)
     hard_threshold: float  # prior error above which a start counts as hard (half the seeds, roughly)
+    com_latent: Callable | None = None  # sim -> true CoM offset, for a task with a second (CoM) belief (pos_com)
 
 
 TASKS = {
@@ -294,6 +352,18 @@ TASKS = {
         )[0],
         # median distance of a uniform draw over the prior disk from its centre
         hard_threshold=COM_BASELINE["task.com_radius"] / np.sqrt(2),
+    ),
+    "pos_com": TaskSetup(
+        task="uncertain_pos_com_cylinder_push",
+        baseline=POS_COM_BASELINE,
+        stages=POS_COM_STAGES,
+        latent=_cart_xy,
+        prior_center=lambda sim: np.asarray(sim.task.prior_mean),
+        reference=lambda sim: sim.task.belief_viz_positions(
+            _true_com(sim)[None], np.concatenate([sim.task.data.qpos, sim.task.data.qvel])
+        )[0],
+        hard_threshold=POS_COM_BASELINE["task.prior_sigma"],
+        com_latent=_true_com,
     ),
 }
 
@@ -321,7 +391,14 @@ class Episode:
     identify_time: float  # first plan step at which the belief std drops below info_gate_std (nan if never)
     final_pos_err: float  # |cart - goal| at the end
     final_yaw_err: float  # |cart angle - goal angle| at the end (nan for tasks without an angle goal)
+    # pos_com task only (nan elsewhere): the CoM belief next to the position belief above
+    mean_com_err: float = float("nan")  # mean over plan steps of |CoM belief mean - true CoM| (m)
+    final_com_err: float = float("nan")
+    final_com_std: float = float("nan")
+    localized_time: float = float("nan")  # first plan step at which the gate is open (position std < localized_std)
+    com_identify_time: float = float("nan")  # first plan step at which the CoM std drops below com_info_gate_std
     belief_err_trace: list[float] = field(default_factory=list, repr=False)  # |belief mean - truth| per plan step
+    com_err_trace: list[float] = field(default_factory=list, repr=False)  # |CoM belief mean - true CoM| (pos_com)
     # trajectory, only kept when recording
     qpos: np.ndarray | None = field(default=None, repr=False)  # (T, nq)
     belief_xy: np.ndarray | None = field(default=None, repr=False)  # (T, N, 2) from belief_viz(), held between plans
@@ -343,6 +420,11 @@ class Episode:
         "identify_time",
         "final_pos_err",
         "final_yaw_err",
+        "mean_com_err",
+        "final_com_err",
+        "final_com_std",
+        "localized_time",
+        "com_identify_time",
     )
 
 
@@ -407,9 +489,9 @@ def run_episode(
     prior_err = float(np.linalg.norm(setup.prior_center(sim) - setup.latent(sim)))
     num_steps = int(round(duration / sim.timestep))
     qpos_log, xy_log, w_log, ref_log = [], [], [], []
-    errors, plan_ms = [], []
+    errors, plan_ms, com_errors = [], [], []
     contacts = 0
-    first_contact_time = success_time = identify_time = float("nan")
+    first_contact_time = success_time = identify_time = localized_time = com_identify_time = float("nan")
 
     for step in range(num_steps):
         t = sim.task.data.time
@@ -422,6 +504,12 @@ def run_episode(
             belief_std = float(np.sqrt(np.trace(ctrl.belief.cov())))
             if np.isnan(identify_time) and belief_std < ctrl.task.config.info_gate_std:
                 identify_time = t
+            if setup.com_latent is not None:
+                com_errors.append(float(np.linalg.norm(ctrl.belief.com_mean() - setup.com_latent(sim))))
+                if np.isnan(localized_time) and ctrl.belief.localized:
+                    localized_time = t
+                if np.isnan(com_identify_time) and ctrl.belief.com_std() < ctrl.task.config.com_info_gate_std:
+                    com_identify_time = t
         if record:
             xy, w = ctrl.belief_viz()
             qpos_log.append(sim.task.data.qpos.copy())
@@ -455,6 +543,12 @@ def run_episode(
         belief_err_trace=errors,
         final_pos_err=float(np.linalg.norm(sim.task.data.qpos[2:4] - sim.task.config.goal_pos[:2])),
         final_yaw_err=yaw_error(sim.task.data) if yaw_error is not None else float("nan"),
+        mean_com_err=float(np.mean(com_errors)) if com_errors else float("nan"),
+        final_com_err=com_errors[-1] if com_errors else float("nan"),
+        final_com_std=ctrl.belief.com_std() if com_errors else float("nan"),
+        localized_time=localized_time,
+        com_identify_time=com_identify_time,
+        com_err_trace=com_errors,
         qpos=np.array(qpos_log) if record else None,
         belief_xy=np.array(xy_log) if record else None,
         belief_w=np.array(w_log) if record else None,
@@ -555,16 +649,28 @@ def summarize(episodes: list[Episode], ablation_names: list[str]) -> list[dict]:
 
 
 def belief_trace_record(ep: Episode) -> dict:
-    """One line of belief_error.jsonl, written as the episode finishes."""
-    return {"ablation": ep.ablation, "seed": ep.seed, "trace": [round(e, 5) for e in ep.belief_err_trace]}
+    """One line of belief_error.jsonl, written as the episode finishes (plus the CoM trace in the pos_com task)."""
+    record = {"ablation": ep.ablation, "seed": ep.seed, "trace": [round(e, 5) for e in ep.belief_err_trace]}
+    if ep.com_err_trace:
+        record["com_trace"] = [round(e, 5) for e in ep.com_err_trace]
+    return record
 
 
 def write_belief_error(path: Path, episodes: list[Episode], plan_dt: float) -> None:
-    """Belief error at every plan step of every episode: {"plan_dt": s, "traces": {ablation: {seed: [m, ...]}}}."""
+    """Belief error at every plan step of every episode: {"plan_dt": s, "traces": {ablation: {seed: [m, ...]}}}.
+
+    The pos_com task adds "com_traces" (same layout) for the CoM belief.
+    """
     traces: dict[str, dict[str, list[float]]] = {}
+    com_traces: dict[str, dict[str, list[float]]] = {}
     for ep in sorted(episodes, key=lambda e: (e.ablation, e.seed)):
         traces.setdefault(ep.ablation, {})[str(ep.seed)] = [round(e, 5) for e in ep.belief_err_trace]
-    path.write_text(json.dumps({"plan_dt": plan_dt, "traces": traces}))
+        if ep.com_err_trace:
+            com_traces.setdefault(ep.ablation, {})[str(ep.seed)] = [round(e, 5) for e in ep.com_err_trace]
+    data = {"plan_dt": plan_dt, "traces": traces}
+    if com_traces:
+        data["com_traces"] = com_traces
+    path.write_text(json.dumps(data))
 
 
 def write_summary_csv(path: Path, rows: list[dict]) -> None:
@@ -692,7 +798,7 @@ def main() -> None:
     """Run every (ablation, seed) pair in parallel and write the logs."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--task", choices=sorted(TASKS), default="position", help="which uncertain push task")
-    parser.add_argument("--stage", type=int, choices=sorted(STAGES), default=1)
+    parser.add_argument("--stage", type=int, choices=[1, 2, 3], default=1)
     parser.add_argument("--seeds", type=int, default=10, help="seeds 0..N-1 for every ablation")
     parser.add_argument("--duration", type=float, default=15.0, help="episode length in sim seconds")
     parser.add_argument("--steps-per-plan", type=int, default=2, help=f"re-plan every N sim steps (dt = {SIM_DT} s)")
@@ -771,7 +877,8 @@ def main() -> None:
                         print(
                             f"[{i:4d}/{len(jobs)} {time.time() - start:6.0f}s] {ep.ablation:40s} seed={ep.seed:<3d} "
                             f"{'SUCCESS' if ep.success else 'fail   '} t_contact={ep.first_contact_time:5.2f} "
-                            f"belief_err={ep.final_belief_err:.3f}",
+                            f"belief_err={ep.final_belief_err:.3f}"
+                            + (f" com_err={ep.final_com_err:.3f}" if ep.com_err_trace else ""),
                             flush=True,
                         )
                 except BaseException:

@@ -19,8 +19,9 @@ Writes, into the run folder:
     figures/baselines*.png          stage 3 only: success per baseline, overall and split by prior error
     figures/belief_error.png        stage 3 only: belief error over time per baseline (from belief_error.json)
 
-Works for both tasks of the runner (run_config["task_key"]: "position" or "com"). Every config is paired against
-"baseline", or against "ours" in a run without one (CoM stage 3).
+Works for all three tasks of the runner (run_config["task_key"]: "position", "com" or "pos_com"). Every config is
+paired against "baseline", or against "ours" in a run without one (stage 3 of the CoM and joint tasks). For the joint
+task the belief error is the cart position's, with the CoM error in the secondary metrics and a second belief panel.
 
 Error bars on success rates are 95% Wilson intervals: with n=20 the usual p +- 1.96*SE leaves [0, 1] near p=1 and
 collapses to zero width at p=1, while Wilson stays inside [0, 1]. Continuous metrics use mean +- standard error.
@@ -100,11 +101,14 @@ CONTINUOUS_METRICS = (
     "identify_time",
     "final_pos_err",
     "final_yaw_err",
+    "final_com_err",
+    "localized_time",
+    "com_identify_time",
 )
 
 
 def task_key(run_config: dict) -> str:
-    """'position' or 'com' (runs from before the CoM task have no task_key and are position runs)."""
+    """'position', 'com' or 'pos_com' (runs from before the CoM task have no task_key and are position runs)."""
     return run_config.get("task_key", "position")
 
 
@@ -440,11 +444,24 @@ BASELINE_LABELS = {
         "no_info": "average CoMs,\nno info term",
         "ours": "ours: average\n+ info gain",
     },
+    "pos_com": {
+        "oracle": "oracle\n(knows cart\n+ CoM)",
+        "oracle_position": "oracle\n(knows cart)",
+        "oracle_com": "oracle\n(knows CoM)",
+        "blind": "blind\n(ignores obs.)",
+        "certainty_equivalent": "plan with\nmeans",
+        "posterior_sampling": "plan with one\nsampled pair",
+        "no_info": "average pairs,\nno info terms",
+        "no_pos_info": "ours without\ncontact info",
+        "no_com_info": "ours without\nCoM info",
+        "ungated": "ours without\nthe gate",
+        "ours": "ours: average\n+ gated info",
+    },
 }
 # What the belief tracks, and what "prior error" means, per task (for axis labels and legends).
-BELIEF_WHAT = {"position": "true cart position", "com": "true CoM"}
-PRIOR_ERROR_WHAT = {"position": "prior error", "com": "CoM offset from centre"}
-BOUNDS, OURS = {"oracle", "blind"}, {"ours"}
+BELIEF_WHAT = {"position": "true cart position", "com": "true CoM", "pos_com": "true cart position"}
+PRIOR_ERROR_WHAT = {"position": "prior error", "com": "CoM offset from centre", "pos_com": "position prior error"}
+BOUNDS, OURS = {"oracle", "oracle_position", "oracle_com", "blind"}, {"ours"}
 
 
 def role_colour(name: str) -> str:
@@ -560,6 +577,9 @@ def plot_secondary(configs: list[dict], task: str, path: Path) -> None:
         ("final_belief_err", "final CoM error (m)" if task == "com" else "final belief error (m)"),
         ("identify_time", "time to identify (s)\nbelief std < info gate"),
         ("final_yaw_err", "final angle error (rad)"),
+        ("final_com_err", "final CoM error (m)"),
+        ("localized_time", "time to localize (s)\nposition std < localized_std"),
+        ("com_identify_time", "time to identify CoM (s)\nCoM std < CoM info gate"),
         ("mean_plan_ms", "planning time per step (ms)"),
     ]
     # keep a metric only if this run logged it and it is not NaN everywhere (e.g. no angle goal in the position task)
@@ -584,7 +604,10 @@ def plot_secondary(configs: list[dict], task: str, path: Path) -> None:
 
 
 def plot_belief_error(run_dir: Path, configs: list[dict], labels: dict[str, str], key: str, path: Path) -> bool:
-    """Belief error over time per baseline (mean +- SE over seeds), from belief_error.json. False if not logged."""
+    """Belief error over time per baseline (mean +- SE over seeds), from belief_error.json. False if not logged.
+
+    The joint task logs a CoM error trace next to the position one; it gets a second panel.
+    """
     source, partial = run_dir / "belief_error.json", run_dir / "belief_error.jsonl"
     if source.exists():
         data = json.loads(source.read_text())
@@ -595,31 +618,46 @@ def plot_belief_error(run_dir: Path, configs: list[dict], labels: dict[str, str]
             if line.strip():
                 rec = json.loads(line)
                 data["traces"].setdefault(rec["ablation"], {})[str(rec["seed"])] = rec["trace"]
+                if "com_trace" in rec:
+                    data.setdefault("com_traces", {}).setdefault(rec["ablation"], {})[str(rec["seed"])] = rec[
+                        "com_trace"
+                    ]
     else:
         return False
     cs = sorted(configs, key=lambda c: c["order"])
-    fig, ax = plt.subplots(figsize=(7.5, 4.2))
+    panels = [("traces", BELIEF_WHAT[key])]
+    if data.get("com_traces"):
+        panels.append(("com_traces", "true CoM"))
+    fig, axs = plt.subplots(1, len(panels), figsize=(7.5 * len(panels), 4.2), squeeze=False)
     # bounds dotted/dashed grey, ours solid orange; the baselines in between get distinct blues and dash patterns
     middle = [c["name"] for c in cs if c["name"] not in BOUNDS | OURS]
-    styles = {"oracle": ":", "blind": "--", **dict(zip(middle, ["-.", (0, (6, 2)), "-", (0, (2, 1))], strict=False))}
+    dashes = ["-.", (0, (6, 2)), "-", (0, (2, 1)), (0, (4, 1, 1, 1)), (0, (1, 1))]
+    styles = {
+        "oracle": ":",
+        "blind": "--",
+        "oracle_position": (0, (3, 3)),
+        "oracle_com": (0, (1, 2)),
+        **{name: dashes[i % len(dashes)] for i, name in enumerate(middle)},
+    }
     shades = dict(zip(middle, ramp(len(middle)), strict=True))
-    for c in cs:
-        traces = data["traces"].get(c["name"], {})
-        if not traces:
-            continue
-        length = min(len(t) for t in traces.values())
-        errs = np.array([t[:length] for t in traces.values()])
-        t = data["plan_dt"] * np.arange(length)
-        mean, se = errs.mean(0), errs.std(0, ddof=1) / np.sqrt(len(errs)) if len(errs) > 1 else np.zeros(length)
-        colour = shades.get(c["name"], role_colour(c["name"]))
-        ax.plot(t, mean, color=colour, linestyle=styles.get(c["name"], "-"), linewidth=1.6,
-                label=labels.get(c["name"], c["name"]).replace("\n", " "))  # fmt: skip
-        ax.fill_between(t, mean - se, mean + se, color=colour, alpha=0.15, linewidth=0)
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("|belief mean − " + BELIEF_WHAT[key] + "| (m)")
-    ax.set_ylim(bottom=0)
-    ax.legend(fontsize=7, ncol=2)
-    ax.set_title(f"Belief error over time (mean ± SE over {cs[0]['n']} seeds)")
+    for ax, (field, what) in zip(axs[0], panels, strict=True):
+        for c in cs:
+            traces = data[field].get(c["name"], {})
+            if not traces:
+                continue
+            length = min(len(t) for t in traces.values())
+            errs = np.array([t[:length] for t in traces.values()])
+            t = data["plan_dt"] * np.arange(length)
+            mean, se = errs.mean(0), errs.std(0, ddof=1) / np.sqrt(len(errs)) if len(errs) > 1 else np.zeros(length)
+            colour = shades.get(c["name"], role_colour(c["name"]))
+            ax.plot(t, mean, color=colour, linestyle=styles.get(c["name"], "-"), linewidth=1.6,
+                    label=labels.get(c["name"], c["name"]).replace("\n", " "))  # fmt: skip
+            ax.fill_between(t, mean - se, mean + se, color=colour, alpha=0.15, linewidth=0)
+        ax.set_xlabel("time (s)")
+        ax.set_ylabel("|belief mean − " + what + "| (m)")
+        ax.set_ylim(bottom=0)
+        ax.legend(fontsize=7, ncol=2)
+        ax.set_title(f"Belief error over time (mean ± SE over {cs[0]['n']} seeds)")
     fig.tight_layout()
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)

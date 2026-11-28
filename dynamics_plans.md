@@ -58,14 +58,54 @@ Everything in A, plus a task subclass that changes the following.
 - **Upside:** a wrong mass at release means failure, so this option should give the clearest gap between planning
   without the information term and the full method.
 
-## Later: joint belief over position and CoM (compute budget)
-A joint belief over (cart position, CoM offset) needs particles that cover both. Planning can either sample joint
-guesses or cross position guesses with CoM guesses. Both cost more rollouts per planning step for the same coverage.
+## Joint task: unknown position and CoM (`uncertain_pos_com_cylinder_push`), implemented
+The goal is the CoM task's goal pose. The latent is both the cart's position (as in the position task) and its CoM
+offset (as in the CoM task). Run it with `--task pos_com`; the baselines are in `scripts/baselines_pos_com/`.
 
-- **Planning budget.** Under a fixed budget (~480 rollouts per step, the live app's 50 ms at 20 Hz), the joint task
-  will have fewer guesses per kind and/or fewer control sequences than either single task. Some loss of performance
-  should be expected and reported.
-- **What to carry over.** The position task's stage 2 and the CoM task's stage 2 (which crosses sequences K with
-  guesses M at a fixed budget) say where each task is least sensitive. Use them to pick the split.
-- **Filter cost.** The filter's cost also grows: the CoM filter simulates one step per particle per observation, and
-  stage 1 showed it needs ~100–300 particles.
+**Design choices** (alternatives in brackets):
+- **What the cart reveals:** touch plus an on-board IMU (yaw and yaw rate, noisy). Cart x and y are never observed.
+  [Touch alone can't give the goal angle: the cart is a disc. Observing the full pose would remove the position
+  uncertainty.]
+- **Touch sensor:** fires when the true surface gap at the post-step state is within `contact_tol` (5 mm), and reports
+  the point on the pusher's rim facing the cart (plus noise). This is the filter's own observation model applied to the
+  true state. MuJoCo's contact list was unusable here: it is one step stale after `mj_step`, and with the cart on a
+  frictional floor the push is a series of kicks that chatter by a few mm, so the list dropped out at real penetrations.
+  Each false "no contact" penalised exactly the hypotheses in contact, and the filter lost the cart.
+- **Factored belief** b(z, θ) ≈ b(z)·b(θ) (`judo/belief/pos_com_belief.py`):
+  - position particles with the contact energy
+  - CoM particles with the dynamics energy on the yaw features only
+  - each position particle is propagated with a CoM drawn from the CoM belief
+  - the CoM update uses the position mean as its plug-in pre-step position
+
+  [One particle set over (z, θ) would deplete the CoM dimension on every contact resample, unless it had ~1000+
+  particles, each with its own MjModel.]
+- **Gate:** the CoM filter updates only while position std < `localized_std` (0.03 m). It is not latched. A sideways
+  position error and a sideways CoM offset give the same torque, so an ungated update fits a CoM that compensates for
+  the position error. `localized_std = inf` is the `ungated` ablation.
+- **Info terms:** `w_info_pos`·IG(contact) is on while the position std > `info_gate_std`. `w_info_com`·IG(yaw
+  dynamics) is on only while localized and while the CoM std > `com_info_gate_std`. So the planner first localizes,
+  then identifies, and values only information the filter will use.
+- **Plan hypotheses:** M (position, CoM) pairs drawn independently from the two marginals. K×M = 48×10 at the
+  defaults, between the position task's 32×15 and the CoM task's 96×5.
+- **What a single straight push identifies:** only the CoM's offset across the push line (from the turning). The
+  offset along the line needs pushes in other directions, which the information term should value.
+
+**Staging:**
+- **Gate (implementation check only):** 1 seed each of ours, oracle and blind.
+- **Stage 1:** `POS_COM_STAGE_1`, one parameter at a time.
+- **Stage 2:** a grid over the stage 1 movers × K×M. Fill in `POS_COM_STAGE_2` and then `TUNED` in
+  `scripts/baselines_pos_com/__init__.py`.
+- **Stage 3:** 11 entries:
+  - **bounds:** oracle, oracle_position, oracle_com, blind
+  - **standard baselines:** certainty_equivalent, posterior_sampling, no_info
+  - **method ablations:** no_pos_info, no_com_info, ungated
+  - **ours**
+
+**Known failure mode (seen while checking the implementation):** each push is a series of kicks that the particles'
+own simulations don't reproduce exactly. The position belief can collapse a few cm off and then lose a cart that slides
+away between kicks: a "phantom cart", as in the position task. Process noise 0.005/0.01 did not clearly help on 6
+seeds, and stage 1 sweeps it.
+
+**Expectation:** separation will most likely come from the position part (hard starts), as in the position task. The
+CoM part may add little, as in the CoM task. Under the fixed ~480-rollout budget some loss against the single-latent
+tasks is expected and accepted.

@@ -9,12 +9,14 @@ from judo.belief.dynamics_energy import (
 )
 from judo.belief.parameter_belief import ParameterBelief
 from judo.belief.particle_filter import ParticleBelief
+from judo.belief.pos_com_belief import PosComBelief
 
 __all__ = [
     "ContactEnergyParams",
     "DynamicsEnergyParams",
     "ParameterBelief",
     "ParticleBelief",
+    "PosComBelief",
     "contact_energy",
     "dynamics_energy",
     "expected_info_gain",

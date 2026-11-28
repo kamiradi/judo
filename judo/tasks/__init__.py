@@ -34,6 +34,10 @@ from judo.tasks.spot import (
 from judo.tasks.spot.spot_constants import SPOT_LOCOMOTION_POLICY_PATH
 from judo.tasks.uncertain_com_cylinder_push import UncertainComCylinderPush, UncertainComCylinderPushConfig
 from judo.tasks.uncertain_cylinder_push import UncertainCylinderPush, UncertainCylinderPushConfig
+from judo.tasks.uncertain_pos_com_cylinder_push import (
+    UncertainPosComCylinderPush,
+    UncertainPosComCylinderPushConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,11 @@ _registered_tasks: Dict[str, TaskRegistration] = {
         UncertainComCylinderPush,
         UncertainComCylinderPushConfig,
         controller_cls="judo.controller.param_belief_controller.ParamBeliefController",
+    ),
+    UncertainPosComCylinderPush.name: TaskRegistration(
+        UncertainPosComCylinderPush,
+        UncertainPosComCylinderPushConfig,
+        controller_cls="judo.controller.pos_com_belief_controller.PosComBeliefController",
     ),
     Cartpole.name: TaskRegistration(Cartpole, CartpoleConfig),
     FR3Pick.name: TaskRegistration(FR3Pick, FR3PickConfig),
@@ -184,4 +193,6 @@ __all__ = [
     "UncertainComCylinderPushConfig",
     "UncertainCylinderPush",
     "UncertainCylinderPushConfig",
+    "UncertainPosComCylinderPush",
+    "UncertainPosComCylinderPushConfig",
 ]

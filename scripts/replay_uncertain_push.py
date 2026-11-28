@@ -4,7 +4,9 @@
 
 The true pusher and cart are rendered from the recorded qpos; the belief particles are drawn with the same rendering as
 the live app (opacity = particle weight): copies of the cart for the position task, small discs on the cart for the
-CoM task. The orange marker is the prior mean (position task) or the true CoM (CoM task). No dora is involved.
+CoM task, and for the joint (pos_com) task small discs at the cart-centre guesses until the cart is localized, then on
+the cart at the CoM guesses. The orange marker is the prior mean (position task) or the true CoM (CoM and joint
+tasks). No dora is involved.
 
 Usage (from the repo root, inside the pixi shell):
     python scripts/replay_uncertain_push.py --file out/ablations/<run>/trajectories/baseline.h5
@@ -43,6 +45,7 @@ def main() -> None:
         seeds = f["seed"][()]
         metrics = {k: f[k][()] for k in ("success", "success_time", "first_contact_time", "final_belief_err")}
         yaw_err = f["final_yaw_err"][()] if "final_yaw_err" in f else None
+        com_err = f["final_com_err"][()] if "final_com_err" in f else None
     num_episodes, num_steps = qpos.shape[:2]
 
     task = get_registered_tasks()[task_name].task_type()
@@ -51,7 +54,8 @@ def main() -> None:
     viser_model = ViserMjModel(server, task.spec)
     belief_geom = getattr(task, "belief_geom_name", "cart")
 
-    is_com = task_name == "uncertain_com_cylinder_push"
+    is_pos_com = task_name == "uncertain_pos_com_cylinder_push"
+    is_com = is_pos_com or task_name == "uncertain_com_cylinder_push"
     marker_what = "true CoM" if is_com else "prior mean"
     goal_marker = server.scene.add_icosphere("/goal", radius=0.08, color=(0, 200, 0), position=(0.0, 0.0, 0.0))
     ref_marker = server.scene.add_icosphere(
@@ -84,12 +88,19 @@ def main() -> None:
         i = episode_slider.value
         goal_marker.position = (*goal_pos[i], 0.0)
         result = "SUCCESS" if metrics["success"][i] else "fail"
-        particles = "orange discs = CoM guesses" if is_com else "orange cylinders = belief particles"
+        particles = (
+            "orange discs = cart-centre guesses, then CoM guesses once localized"
+            if is_pos_com
+            else "orange discs = CoM guesses"
+            if is_com
+            else "orange cylinders = belief particles"
+        )
         info.content = (
             f"seed **{seeds[i]}** — {result}  \n"
             f"success at {metrics['success_time'][i]:.2f}s, first contact at {metrics['first_contact_time'][i]:.2f}s  \n"
             f"final belief error {metrics['final_belief_err'][i]:.3f} m"
             + (f", final angle error {yaw_err[i]:.2f} rad" if is_com and yaw_err is not None else "")
+            + (f", final CoM error {com_err[i]:.3f} m" if is_pos_com and com_err is not None else "")
             + f"  \n(green = goal, orange dot = {marker_what}, {particles})"
         )
         step_slider.value = 0
